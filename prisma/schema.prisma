@@ -1,0 +1,542 @@
+// CFO Sentinel — Prisma schema (foundation phase).
+//
+// Conventions:
+// - Every tenant-scoped table carries `orgId` for organization isolation.
+// - Money uses Decimal(14,2). Deterministic services round to 2dp.
+// - Double-entry invariant: for each JournalEntry, SUM(debit) == SUM(credit)
+//   across its Transactions (Transaction = journal line).
+// - Timestamps: createdAt/updatedAt where mutation is expected.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum UserRole {
+  ADMIN
+  CFO
+  CONTROLLER
+  VIEWER
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  COGS
+  EXPENSE
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  PARTIALLY_BILLED
+  BILLED
+  CLOSED
+  CANCELLED
+}
+
+enum InvoiceType {
+  AP // vendor bill (cost)
+  AR // customer invoice (revenue)
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum JournalStatus {
+  DRAFT
+  POSTED
+  VOID
+}
+
+enum TransactionSource {
+  MANUAL
+  INVOICE_AP
+  INVOICE_AR
+  PAYROLL
+  ADJUSTMENT
+}
+
+enum IncidentType {
+  GROSS_MARGIN_DECLINE
+  CASH_CRISIS
+  REVENUE_LEAKAGE
+  EXPENSE_SPIKE
+  OTHER
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  PENDING_APPROVAL
+  RESOLVED
+  CLOSED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ActionStatus {
+  PROPOSED
+  SIMULATED
+  APPROVED
+  REJECTED
+  EXECUTED
+  VERIFIED
+  FAILED
+}
+
+enum AgentRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AgentStepStatus {
+  PENDING
+  RUNNING
+  OK
+  ERROR
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+// ---------------------------------------------------------------- core
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          User[]
+  vendors        Vendor[]
+  customers      Customer[]
+  accounts       Account[]
+  contracts      Contract[]
+  purchaseOrders PurchaseOrder[]
+  invoices       Invoice[]
+  journalEntries JournalEntry[]
+  transactions   Transaction[]
+  incidents      FinancialIncident[]
+  agentRuns      AgentRun[]
+  approvals      Approval[]
+  auditLogs      AuditLog[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  orgId     String
+  email     String
+  name      String
+  role      UserRole @default(VIEWER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org              Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  requestedApprovals Approval[]       @relation("RequestedBy")
+  decidedApprovals   Approval[]       @relation("DecidedBy")
+  auditLogs          AuditLog[]
+  createdIncidents   FinancialIncident[] @relation("CreatedBy")
+
+  @@unique([orgId, email])
+  @@index([orgId])
+}
+
+model Vendor {
+  id           String   @id @default(cuid())
+  orgId        String
+  name         String
+  code         String
+  category     String   @default("RAW_MATERIALS")
+  paymentTerms String   @default("NET_30")
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contracts      Contract[]
+  purchaseOrders PurchaseOrder[]
+  invoices       Invoice[]
+  transactions   Transaction[]
+
+  @@unique([orgId, code])
+  @@index([orgId])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  code      String
+  segment   String   @default("MANUFACTURING")
+  region    String   @default("US-MIDWEST")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+  transactions Transaction[]
+
+  @@unique([orgId, code])
+  @@index([orgId])
+}
+
+model Account {
+  id        String      @id @default(cuid())
+  orgId     String
+  code      String
+  name      String
+  type      AccountType
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([orgId, code])
+  @@index([orgId])
+  @@index([orgId, type])
+}
+
+// ---------------------------------------------------------------- procure-to-pay chain
+// Vendor -> Contract -> PurchaseOrder -> Invoice -> Transaction(JournalLine)
+//                                          -> JournalEntry(header)
+
+model Contract {
+  id            String         @id @default(cuid())
+  orgId         String
+  vendorId      String
+  contractNumber String
+  title         String
+  material      String         @default("STEEL_COIL")
+  unitOfMeasure String         @default("TON")
+  unitPrice     Decimal        @db.Decimal(14, 2)
+  quantity      Decimal        @db.Decimal(14, 2)
+  totalValue    Decimal        @db.Decimal(14, 2)
+  status        ContractStatus @default(ACTIVE)
+  startDate     DateTime
+  endDate       DateTime
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  vendor         Vendor          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  purchaseOrders PurchaseOrder[]
+  invoices       Invoice[]
+
+  @@unique([orgId, contractNumber])
+  @@index([orgId])
+  @@index([vendorId])
+}
+
+model PurchaseOrder {
+  id           String               @id @default(cuid())
+  orgId        String
+  vendorId     String
+  contractId   String?
+  poNumber     String
+  status       PurchaseOrderStatus  @default(SENT)
+  material     String               @default("STEEL_COIL")
+  quantity     Decimal              @db.Decimal(14, 2)
+  unitPrice    Decimal              @db.Decimal(14, 2)
+  subtotal     Decimal              @db.Decimal(14, 2)
+  tax          Decimal              @db.Decimal(14, 2) @default(0)
+  total        Decimal              @db.Decimal(14, 2)
+  currency     String               @default("USD")
+  orderDate    DateTime
+  expectedDate DateTime?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  vendor   Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  contract Contract?    @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  invoices Invoice[]
+
+  @@unique([orgId, poNumber])
+  @@index([orgId])
+  @@index([vendorId])
+  @@index([contractId])
+  @@index([orgId, orderDate])
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  orgId         String
+  type          InvoiceType
+  status        InvoiceStatus @default(SENT)
+  invoiceNumber String
+  vendorId      String?
+  customerId    String?
+  contractId    String?
+  purchaseOrderId String?
+  material      String?
+  quantity      Decimal?      @db.Decimal(14, 2)
+  unitPrice     Decimal?      @db.Decimal(14, 2)
+  subtotal      Decimal       @db.Decimal(14, 2)
+  tax           Decimal       @db.Decimal(14, 2) @default(0)
+  total         Decimal       @db.Decimal(14, 2)
+  currency      String        @default("USD")
+  issueDate     DateTime
+  dueDate       DateTime?
+  paidAt        DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  org           Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  vendor        Vendor?        @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  customer      Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  contract      Contract?      @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  transactions  Transaction[]
+
+  @@unique([orgId, invoiceNumber])
+  @@index([orgId])
+  @@index([orgId, type, issueDate])
+  @@index([vendorId])
+  @@index([customerId])
+  @@index([contractId])
+  @@index([purchaseOrderId])
+}
+
+model JournalEntry {
+  id          String        @id @default(cuid())
+  orgId       String
+  entryNumber String
+  date        DateTime
+  memo        String
+  source      TransactionSource @default(MANUAL)
+  status      JournalStatus @default(POSTED)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([orgId, entryNumber])
+  @@index([orgId])
+  @@index([orgId, date])
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  orgId          String
+  journalEntryId String
+  accountId      String
+  vendorId       String?
+  customerId     String?
+  invoiceId      String?
+  date           DateTime
+  debit          Decimal  @db.Decimal(14, 2) @default(0)
+  credit         Decimal  @db.Decimal(14, 2) @default(0)
+  description    String   @default("")
+  createdAt      DateTime @default(now())
+
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  journalEntry JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  vendor       Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  invoice      Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@index([orgId, date])
+  @@index([vendorId])
+  @@index([invoiceId])
+}
+
+// ---------------------------------------------------------------- incidents / agent
+
+model FinancialIncident {
+  id          String         @id @default(cuid())
+  orgId       String
+  title       String
+  description String         @default("")
+  type        IncidentType   @default(OTHER)
+  status      IncidentStatus @default(OPEN)
+  severity    Severity       @default(MEDIUM)
+  periodStart DateTime?
+  periodEnd   DateTime?
+  detectedAt  DateTime       @default(now())
+  resolvedAt  DateTime?
+  createdById String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  org        Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy  User?              @relation("CreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  findings   IncidentFinding[]
+  evidence   IncidentEvidence[]
+  actions    IncidentAction[]
+  agentRuns  AgentRun[]
+  approvals  Approval[]
+
+  @@index([orgId])
+  @@index([orgId, status])
+  @@index([orgId, type])
+}
+
+model IncidentFinding {
+  id          String   @id @default(cuid())
+  incidentId  String
+  title       String
+  description String   @default("")
+  confidence  Decimal  @db.Decimal(5, 4) @default(0)
+  rank        Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  incident FinancialIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  evidence IncidentEvidence[]
+
+  @@index([incidentId])
+}
+
+model IncidentEvidence {
+  id         String   @id @default(cuid())
+  incidentId String
+  findingId  String?
+  toolName   String
+  input      Json     @default("{}")
+  output     Json     @default("{}")
+  summary    String   @default("")
+  occurredAt DateTime @default(now())
+
+  incident FinancialIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  finding  IncidentFinding?  @relation(fields: [findingId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId])
+  @@index([findingId])
+}
+
+model IncidentAction {
+  id               String       @id @default(cuid())
+  incidentId       String
+  type             String       @default("RECOMMENDATION")
+  title            String
+  description      String       @default("")
+  payload          Json         @default("{}")
+  status           ActionStatus @default(PROPOSED)
+  simulationResult Json?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  incident  FinancialIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  approvals Approval[]
+
+  @@index([incidentId])
+}
+
+model AgentRun {
+  id         String         @id @default(cuid())
+  orgId      String
+  incidentId String?
+  status     AgentRunStatus @default(RUNNING)
+  input      Json           @default("{}")
+  output     Json?
+  modelName  String?
+  startedAt  DateTime       @default(now())
+  finishedAt DateTime?
+
+  org      Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  incident FinancialIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  steps    AgentStep[]
+
+  @@index([orgId])
+  @@index([incidentId])
+}
+
+model AgentStep {
+  id        String          @id @default(cuid())
+  runId     String
+  seq       Int
+  toolName  String?
+  input     Json?
+  output    Json?
+  reasoning String?
+  status    AgentStepStatus @default(PENDING)
+  startedAt DateTime        @default(now())
+  finishedAt DateTime?
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, seq])
+  @@index([runId])
+}
+
+model Approval {
+  id            String         @id @default(cuid())
+  orgId         String
+  incidentId    String?
+  actionId      String?
+  requestedById String
+  decidedById   String?
+  status        ApprovalStatus @default(PENDING)
+  reason        String         @default("")
+  decidedAt     DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  org         Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  incident    FinancialIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  action      IncidentAction?    @relation(fields: [actionId], references: [id], onDelete: SetNull)
+  requestedBy User               @relation("RequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  decidedBy   User?              @relation("DecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([orgId, status])
+  @@index([incidentId])
+  @@index([actionId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  orgId      String?
+  actorId    String?
+  action     String
+  entityType String   @default("")
+  entityId   String?  @default("")
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  org   Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  actor User?         @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@index([action])
+  @@index([createdAt])
+}

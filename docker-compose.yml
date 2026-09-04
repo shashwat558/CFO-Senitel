@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cfo-sentinel-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cfo
+      POSTGRES_PASSWORD: cfo_secret
+      POSTGRES_DB: cfo_sentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - cfo-sentinel-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cfo -d cfo_sentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  cfo-sentinel-pgdata:

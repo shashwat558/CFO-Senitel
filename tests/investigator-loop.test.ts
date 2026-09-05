@@ -17,13 +17,30 @@ function mockDb() {
 
 const toolCtxFor = (db: PrismaClient) => ({ db, orgId: "org1" });
 
-function fakeLlm(script: Array<{ content: unknown; toolCalls?: Array<{ id: string; name: string; args: unknown }> }>) {
+type Turn = { content: unknown; toolCalls?: Array<{ id: string; name: string; args: unknown }> };
+
+const PLAN = {
+  objective: "Explain the August gross margin decline",
+  period: "2024-08",
+  metric: "gross_margin",
+  knownFacts: ["margin fell in August"],
+  unknowns: ["whether COGS or revenue moved"],
+  initialPlan: ["get baseline P&L", "follow the evidence"],
+};
+
+function fakeLlm(turns: Turn[], plan: unknown = PLAN) {
   const seenMessages: unknown[][] = [];
+  const seenSchemas: string[] = [];
   let i = 0;
   const llm = {
-    continueConversation: vi.fn(async (req: { messages: unknown[] }) => {
+    continueConversation: vi.fn(async (req: { messages: unknown[]; responseSchema: { name: string } }) => {
       seenMessages.push(req.messages);
-      const turn = script[Math.min(i, script.length - 1)];
+      seenSchemas.push(req.responseSchema.name);
+      if (i === 0) {
+        i += 1;
+        return { content: plan, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+      }
+      const turn = turns[Math.min(i - 1, turns.length - 1)];
       i += 1;
       return {
         content: turn.content,
@@ -39,18 +56,18 @@ function fakeLlm(script: Array<{ content: unknown; toolCalls?: Array<{ id: strin
       };
     }),
   } as unknown as InvestigatorClient;
-  return { llm, seenMessages };
+  return { llm, seenMessages, seenSchemas };
 }
 
 const impactArgs = { orgId: "org1", baselineUnitPrice: 850, actualUnitPrice: 1088, quantity: 330 };
 
 describe("investigator tool loop", () => {
-  it("calls multiple tools sequentially then answers", async () => {
+  it("frames a plan first, then calls multiple tools sequentially before answering", async () => {
     const db = mockDb();
-    const { llm, seenMessages } = fakeLlm([
-      { content: { summary: "checking" }, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: impactArgs }] },
-      { content: { summary: "checking more" }, toolCalls: [{ id: "c2", name: "calculateFinancialImpact", args: impactArgs }] },
-      { content: { summary: "Overcharge of 78540 explains the decline.", findings: [], needsMoreEvidence: false } },
+    const { llm, seenMessages, seenSchemas } = fakeLlm([
+      { content: { thinking: "baseline first", done: false }, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: impactArgs }] },
+      { content: { thinking: "dig deeper", done: false }, toolCalls: [{ id: "c2", name: "calculateFinancialImpact", args: impactArgs }] },
+      { content: { thinking: "done", done: true, summary: "Overcharge of 78540 explains the decline." } },
     ]);
     const res = await runInvestigatorLoop({
       db,
@@ -63,23 +80,104 @@ describe("investigator tool loop", () => {
     expect(res.status).toBe("COMPLETED");
     expect(res.toolCallsExecuted).toBe(2);
     expect(res.iterations).toBe(3);
+    expect(res.plan).toMatchObject({ objective: expect.stringContaining("August"), metric: "gross_margin" });
     expect(res.answer).toMatchObject({ summary: expect.stringContaining("78540") });
-    // every step persisted: 3 llm turns + 2 tool executions
-    expect(db.agentStep.create).toHaveBeenCalledTimes(5);
+    // plan framing used the plan schema with no tools, then deliberation turns
+    expect(seenSchemas[0]).toBe("investigation_plan");
+    expect(seenSchemas.slice(1).every((s) => s === "investigation_deliberation")).toBe(true);
+    // every step persisted: 1 plan + 3 llm turns + 2 tool executions
+    expect(db.agentStep.create).toHaveBeenCalledTimes(6);
     expect(db.incidentEvidence.create).toHaveBeenCalledTimes(2);
     expect(db.agentRun.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "run_1" }, data: expect.objectContaining({ status: "COMPLETED" }) }),
     );
     // tool results were fed back into the conversation
-    const lastTurn = seenMessages[2] as Array<{ role: string }>;
+    const lastTurn = seenMessages[seenMessages.length - 1] as Array<{ role: string }>;
     expect(lastTurn.filter((m) => m.role === "tool")).toHaveLength(2);
+  });
+
+  it("takes different investigation paths depending on tool results", async () => {
+    // Decision-function fake: reads the actual tool result from the message
+    // history and branches. Big impact -> quantify further; zero impact ->
+    // pivot to contract terms. Nothing about this sequence is hardcoded.
+    async function runBranching(firstArgs: typeof impactArgs) {
+      const db = mockDb();
+      let calls = 0;
+      const norm = (id: string, name: string, args: unknown) => ({
+        id,
+        name,
+        arguments: JSON.stringify(args),
+        parsedArgs: args,
+      });
+      const llm = {
+        continueConversation: vi.fn(async (req: { messages: Array<{ role: string; content?: string }> }) => {
+          calls += 1;
+          if (calls === 1) return { content: PLAN, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+          const lastTool = [...req.messages].reverse().find((m) => m.role === "tool");
+          if (!lastTool) {
+            return {
+              content: { thinking: "baseline first", done: false },
+              toolCalls: [norm("c1", "calculateFinancialImpact", firstArgs)],
+              finishReason: "stop", usage: null, model: "fake",
+            };
+          }
+          const impact = (JSON.parse(lastTool.content ?? "{}") as { data?: { totalImpact?: number } }).data?.totalImpact ?? 0;
+          if (impact > 0) {
+            const priorToolCalls = req.messages.filter((m) => m.role === "tool").length;
+            if (priorToolCalls === 1) {
+              return {
+                content: { thinking: "big impact — quantify at larger scale", done: false },
+                toolCalls: [norm("c2", "calculateFinancialImpact", { ...firstArgs, quantity: firstArgs.quantity * 2 })],
+                finishReason: "stop", usage: null, model: "fake",
+              };
+            }
+            return {
+              content: { thinking: "done", done: true, summary: `confirmed scaled impact ${impact}` },
+              toolCalls: [], finishReason: "stop", usage: null, model: "fake",
+            };
+          }
+          const alreadyPivoted = req.messages.some(
+            (m) => m.role === "assistant" && JSON.stringify(m).includes("getContract"),
+          );
+          if (alreadyPivoted) {
+            return {
+              content: { thinking: "done", done: true, summary: "contract path exhausted" },
+              toolCalls: [], finishReason: "stop", usage: null, model: "fake",
+            };
+          }
+          return {
+            content: { thinking: "no price impact — pivot to contract terms", done: false },
+            toolCalls: [norm("c2", "getContract", { orgId: "org1", contractNumber: "CTR-2024-APEX" })],
+            finishReason: "stop", usage: null, model: "fake",
+          };
+        }),
+      } as unknown as InvestigatorClient;
+      const res = await runInvestigatorLoop({
+        db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1", question: "Why did margin fall?",
+      });
+      const toolNames = ((db.agentStep.create as unknown as { mock: { calls: unknown[][] } }).mock.calls)
+        .map((c) => (c[0] as { data: { toolName: string | null } }).data.toolName)
+        .filter(Boolean);
+      return { res, toolNames };
+    }
+
+    // Path A: real overcharge (78540) -> second quantification -> done.
+    const pathA = await runBranching(impactArgs);
+    expect(pathA.res.status).toBe("COMPLETED");
+    expect(pathA.toolNames).toEqual(["calculateFinancialImpact", "calculateFinancialImpact"]);
+    expect(pathA.res.answer).toMatchObject({ summary: expect.stringContaining("157080") });
+
+    // Path B: zero impact (baseline == actual) -> pivots to getContract.
+    const pathB = await runBranching({ ...impactArgs, actualUnitPrice: 850 });
+    expect(pathB.toolNames[0]).toBe("calculateFinancialImpact");
+    expect(pathB.toolNames[1]).toBe("getContract");
   });
 
   it("feeds tool errors back and continues", async () => {
     const db = mockDb();
     const { llm } = fakeLlm([
-      { content: null, toolCalls: [{ id: "c1", name: "noSuchTool", args: { orgId: "org1" } }] },
-      { content: { summary: "No valid tool available." } },
+      { content: { thinking: "try", done: false }, toolCalls: [{ id: "c1", name: "noSuchTool", args: { orgId: "org1" } }] },
+      { content: { thinking: "done", done: true, summary: "No valid tool available." } },
     ]);
     const res = await runInvestigatorLoop({
       db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1", question: "Why?",
@@ -92,8 +190,8 @@ describe("investigator tool loop", () => {
   it("handles malformed tool arguments without crashing", async () => {
     const db = mockDb();
     const { llm } = fakeLlm([
-      { content: null, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: "{bad json" }] },
-      { content: { summary: "Args were malformed; stopped." } },
+      { content: { thinking: "try", done: false }, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: "{bad json" }] },
+      { content: { thinking: "done", done: true, summary: "Args were malformed; stopped." } },
     ]);
     const res = await runInvestigatorLoop({
       db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1", question: "Why?",
@@ -105,7 +203,7 @@ describe("investigator tool loop", () => {
   it("stops at max iterations", async () => {
     const db = mockDb();
     const { llm } = fakeLlm([
-      { content: null, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: impactArgs }] },
+      { content: { thinking: "more", done: false }, toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: impactArgs }] },
     ]);
     const res = await runInvestigatorLoop({
       db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
@@ -119,17 +217,20 @@ describe("investigator tool loop", () => {
     const db = mockDb();
     let calls = 0;
     const llm = {
-      continueConversation: vi.fn(async () => {
+      continueConversation: vi.fn(async (req: { responseSchema: { name: string } }) => {
         calls += 1;
         if (calls === 1) throw new InvestigatorError("SERVER", "boom", true);
-        return { content: { summary: "Recovered." }, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+        if (req.responseSchema.name === "investigation_plan") {
+          return { content: PLAN, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+        }
+        return { content: { thinking: "recovered", done: true, summary: "Recovered." }, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
       }),
     } as unknown as InvestigatorClient;
     const res = await runInvestigatorLoop({
       db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1", question: "Why?",
     });
     expect(res.status).toBe("COMPLETED");
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
   });
 
   it("supports cancellation via AbortSignal", async () => {

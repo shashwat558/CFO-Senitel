@@ -13,6 +13,7 @@
 //     evidence for a hypothesis.
 
 import { z } from "zod";
+import { createFinding, toIncidentFindingRow } from "./findings";
 
 export const hypothesisStatusSchema = z.enum([
   "PROPOSED",
@@ -117,7 +118,7 @@ export function activeHypothesis(hypotheses: Hypothesis[]): Hypothesis | null {
   return null;
 }
 
-/** Serialize a hypothesis into an IncidentFinding row payload. */
+/** Serialize a hypothesis into an IncidentFinding row payload (via Finding). */
 export function toIncidentFinding(h: Hypothesis, incidentId: string, rank: number): {
   incidentId: string;
   title: string;
@@ -125,11 +126,19 @@ export function toIncidentFinding(h: Hypothesis, incidentId: string, rank: numbe
   confidence: number;
   rank: number;
 } {
-  return {
+  const statusMap = {
+    PROPOSED: "HYPOTHESIS",
+    INVESTIGATING: "INVESTIGATING",
+    SUPPORTED: "SUPPORTED",
+    REJECTED: "REJECTED",
+  } as const;
+  const finding = createFinding({
     incidentId,
-    title: h.statement.slice(0, 500),
-    description: `status=${h.status} supporting=${h.supportingEvidence.length} contradictory=${h.contradictoryEvidence.length}`,
+    statement: h.statement,
+    id: h.id,
+    type: "HYPOTHESIS",
+    status: statusMap[h.status],
     confidence: h.confidence,
-    rank,
-  };
+  });
+  return toIncidentFindingRow(finding, rank);
 }

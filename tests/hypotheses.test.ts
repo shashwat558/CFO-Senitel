@@ -70,6 +70,7 @@ describe("hypothesis management", () => {
     const row = toIncidentFinding(h, "inc1", 0);
     expect(row).toMatchObject({ incidentId: "inc1", rank: 0 });
     expect(row.title).toContain("COGS");
-    expect(row.description).toContain("status=PROPOSED");
+    const envelope = JSON.parse(row.description) as { kind: string; status: string; type: string };
+    expect(envelope).toMatchObject({ kind: "finding", status: "HYPOTHESIS", type: "HYPOTHESIS" });
   });
 });

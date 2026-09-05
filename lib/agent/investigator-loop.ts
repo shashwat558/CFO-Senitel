@@ -29,9 +29,15 @@ import {
   hypothesisStatusSchema,
   setConfidence,
   setHypothesisStatus,
-  toIncidentFinding,
   type Hypothesis,
 } from "./hypotheses";
+import {
+  createFinding,
+  linkAgentStep,
+  recordFinding,
+  updateFindingRow,
+  type Finding,
+} from "./findings";
 
 export const INVESTIGATOR_SYSTEM_PROMPT =
   "You are a CFO investigation assistant. You decide the investigation path yourself: " +
@@ -140,6 +146,7 @@ export interface LoopResult {
   answer: unknown;
   plan: InvestigationPlan | null;
   hypotheses: Hypothesis[];
+  findings: Finding[];
   runId: string;
   iterations: number;
   toolCallsExecuted: number;
@@ -182,7 +189,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     output?: unknown;
     reasoning?: string | null;
     status: "PENDING" | "RUNNING" | "OK" | "ERROR";
-  }) => {
+  }): Promise<number> => {
     seq += 1;
     opts.onStep?.({ seq, kind: step.toolName ? `tool:${step.toolName}` : "llm", detail: step.reasoning ?? "" });
     await db.agentStep.create({
@@ -196,6 +203,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
         status: step.status,
       },
     });
+    return seq;
   };
 
   const finishRun = async (
@@ -219,23 +227,46 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
   let answer: unknown = null;
   let plan: InvestigationPlan | null = null;
 
-  // Live hypothesis registry + IncidentFinding row ids (best-effort).
+  // Live hypothesis registry + mirrored findings + IncidentFinding row ids.
   let hypotheses: Hypothesis[] = [];
+  let findings: Finding[] = [];
   const findingIds = new Map<string, string>();
 
-  const persistHypothesis = async (h: Hypothesis) => {
+  const persistHypothesis = async (h: Hypothesis, agentStepSeq: number | null = null) => {
     try {
-      const rank = hypotheses.findIndex((x) => x.id === h.id);
-      const payload = toIncidentFinding(h, incidentId, rank);
+      const rank = Math.max(0, hypotheses.findIndex((x) => x.id === h.id));
+      const statusMap = {
+        PROPOSED: "HYPOTHESIS",
+        INVESTIGATING: "INVESTIGATING",
+        SUPPORTED: "SUPPORTED",
+        REJECTED: "REJECTED",
+      } as const;
+      let f = findings.find((x) => x.id === h.id);
+      if (!f) {
+        f = createFinding({
+          incidentId,
+          statement: h.statement,
+          id: h.id,
+          type: "HYPOTHESIS",
+          status: statusMap[h.status],
+          confidence: h.confidence,
+        });
+        findings.push(f);
+      } else {
+        f = { ...f, statement: h.statement, status: statusMap[h.status], confidence: h.confidence };
+        findings = findings.map((x) => (x.id === f!.id ? f! : x));
+      }
+      if (agentStepSeq !== null) f = linkAgentStep(f, `step_${agentStepSeq}`);
+      findings = findings.map((x) => (x.id === (f as Finding).id ? (f as Finding) : x));
       const existing = findingIds.get(h.id);
       if (existing) {
-        await db.incidentFinding.update({ where: { id: existing }, data: payload });
+        await updateFindingRow(db, existing, f, rank);
       } else {
-        const row = await db.incidentFinding.create({ data: payload });
-        findingIds.set(h.id, (row as { id: string }).id);
+        const rowId = await recordFinding(db, f, rank);
+        findingIds.set(h.id, rowId);
       }
     } catch {
-      // Hypothesis persistence must never break the loop.
+      // Hypothesis/finding persistence must never break the loop.
     }
   };
 
@@ -277,13 +308,13 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
       if (u.confidence !== undefined) h = setConfidence(h, u.confidence);
       const finalH = h;
       hypotheses = hypotheses.map((x) => (x.id === finalH.id ? finalH : x));
-      await persistStep({
+      const stepSeq = await persistStep({
         input: { hypothesisId: finalH.id },
         output: finalH,
         reasoning: `hypothesis ${finalH.id} -> ${finalH.status} (confidence ${finalH.confidence}): ${finalH.statement}`,
         status: "OK",
       });
-      await persistHypothesis(finalH);
+      await persistHypothesis(finalH, stepSeq);
     }
   };
 
@@ -357,8 +388,8 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
         // The ONLY finish signal: no further tool needed AND done:true.
         if (deliberation.done === true) {
           answer = response.content;
-          await finishRun("COMPLETED", { answer, plan, hypotheses, iterations, toolCallsExecuted });
-          return { status: "COMPLETED", answer, plan, hypotheses, runId, iterations, toolCallsExecuted };
+          await finishRun("COMPLETED", { answer, plan, hypotheses, findings, iterations, toolCallsExecuted });
+          return { status: "COMPLETED", answer, plan, hypotheses, findings, runId, iterations, toolCallsExecuted };
         }
         // Premature stop — nudge the agent to choose a tool or finish honestly.
         messages.push({
@@ -423,12 +454,12 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     }
 
     // Max iterations reached without a final answer.
-    await finishRun("COMPLETED", { answer: null, plan, hypotheses, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
-    return { status: "MAX_ITERATIONS", answer: null, plan, hypotheses, runId, iterations, toolCallsExecuted };
+    await finishRun("COMPLETED", { answer: null, plan, hypotheses, findings, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
+    return { status: "MAX_ITERATIONS", answer: null, plan, hypotheses, findings, runId, iterations, toolCallsExecuted };
   } catch (err) {
     if (signal?.aborted || (err instanceof InvestigatorError && err.message === "Investigation cancelled")) {
-      await finishRun("CANCELLED", { plan, hypotheses, iterations, toolCallsExecuted });
-      return { status: "CANCELLED", answer: null, plan, hypotheses, runId, iterations, toolCallsExecuted };
+      await finishRun("CANCELLED", { plan, hypotheses, findings, iterations, toolCallsExecuted });
+      return { status: "CANCELLED", answer: null, plan, hypotheses, findings, runId, iterations, toolCallsExecuted };
     }
     await persistStep({
       reasoning: err instanceof Error ? err.message : String(err),
@@ -438,6 +469,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
       error: err instanceof Error ? err.message : String(err),
       plan,
       hypotheses,
+      findings,
       iterations,
       toolCallsExecuted,
     });
@@ -446,6 +478,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
       answer: null,
       plan,
       hypotheses,
+      findings,
       runId,
       iterations,
       toolCallsExecuted,

@@ -303,6 +303,20 @@ describe("investigator tool loop", () => {
     expect(byStatement["COGS increase caused margin decline."].status).toBe("REJECTED");
     expect(byStatement["COGS increase caused margin decline."].contradictoryEvidence).toHaveLength(1);
     expect(byStatement["Revenue leakage caused margin decline."].status).toBe("SUPPORTED");
+    // agent created structured findings during the investigation, mirroring
+    // hypotheses with statement/type/status/confidence + agent step links
+    expect(res.findings).toHaveLength(2);
+    const findingsByStatement = Object.fromEntries(res.findings.map((f) => [f.statement, f]));
+    expect(findingsByStatement["COGS increase caused margin decline."]).toMatchObject({
+      type: "HYPOTHESIS",
+      status: "REJECTED",
+      incidentId: "inc1",
+    });
+    expect(findingsByStatement["Revenue leakage caused margin decline."].status).toBe("SUPPORTED");
+    for (const f of res.findings) {
+      expect(f.confidence).toBeGreaterThanOrEqual(0);
+      expect(f.agentStepId).toMatch(/^step_\d+$/);
+    }
     // hypotheses persisted as findings; tool evidence linked to a finding
     expect(db.incidentFinding.create).toHaveBeenCalled();
     const evidenceCalls = (db.incidentEvidence.create as unknown as { mock: { calls: unknown[][] } }).mock.calls;

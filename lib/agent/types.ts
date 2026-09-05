@@ -14,6 +14,6 @@ export type AgentRunInput = z.infer<typeof agentRunInputSchema>;
 export interface AgentHypothesis {
   id: string;
   statement: string;
-  status: "OPEN" | "SUPPORTED" | "REJECTED";
+  status: "PROPOSED" | "INVESTIGATING" | "SUPPORTED" | "REJECTED";
   confidence: number;
 }

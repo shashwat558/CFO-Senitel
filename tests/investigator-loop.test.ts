@@ -11,6 +11,10 @@ function mockDb() {
     },
     agentStep: { create: vi.fn().mockResolvedValue({}) },
     incidentEvidence: { create: vi.fn().mockResolvedValue({}) },
+    incidentFinding: {
+      create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) => Promise.resolve({ id: "finding_1", ...args.data })),
+      update: vi.fn().mockResolvedValue({}),
+    },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   } as unknown as PrismaClient;
 }
@@ -243,5 +247,69 @@ describe("investigator tool loop", () => {
       question: "Why?", signal: controller.signal,
     });
     expect(res.status).toBe("CANCELLED");
+  });
+
+  it("abandons an unsupported hypothesis and investigates another explanation", async () => {
+    const db = mockDb();
+    const { llm } = fakeLlm([
+      {
+        content: {
+          thinking: "COGS first",
+          done: false,
+          hypotheses: [
+            { statement: "COGS increase caused margin decline.", status: "INVESTIGATING", confidence: 0.6 },
+          ],
+        },
+        toolCalls: [{ id: "c1", name: "calculateFinancialImpact", args: { ...impactArgs, actualUnitPrice: 850 } }],
+      },
+      {
+        // Zero price impact contradicts the COGS story: reject it, open revenue-leakage.
+        content: {
+          thinking: "COGS ruled out, pivoting",
+          done: false,
+          hypotheses: [
+            {
+              statement: "COGS increase caused margin decline.",
+              status: "REJECTED",
+              confidence: 0.1,
+              contradicting: ["price impact is zero at actual == baseline"],
+            },
+            { statement: "Revenue leakage caused margin decline.", status: "INVESTIGATING", confidence: 0.55 },
+          ],
+        },
+        toolCalls: [{ id: "c2", name: "calculateFinancialImpact", args: impactArgs }],
+      },
+      {
+        content: {
+          thinking: "done",
+          done: true,
+          summary: "Revenue-side overcharge of 78540 explains the decline.",
+          hypotheses: [
+            { statement: "Revenue leakage caused margin decline.", status: "SUPPORTED", confidence: 0.85 },
+          ],
+        },
+      },
+    ]);
+    const res = await runInvestigatorLoop({
+      db,
+      llm,
+      toolCtx: toolCtxFor(db),
+      orgId: "org1",
+      incidentId: "inc1",
+      question: "Why did gross margin fall in August?",
+    });
+    expect(res.status).toBe("COMPLETED");
+    const byStatement = Object.fromEntries(res.hypotheses.map((h) => [h.statement, h]));
+    expect(byStatement["COGS increase caused margin decline."].status).toBe("REJECTED");
+    expect(byStatement["COGS increase caused margin decline."].contradictoryEvidence).toHaveLength(1);
+    expect(byStatement["Revenue leakage caused margin decline."].status).toBe("SUPPORTED");
+    // hypotheses persisted as findings; tool evidence linked to a finding
+    expect(db.incidentFinding.create).toHaveBeenCalled();
+    const evidenceCalls = (db.incidentEvidence.create as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(evidenceCalls.length).toBe(2);
+    const linked = evidenceCalls.filter(
+      (c) => (c[0] as { data: { findingId: string | null } }).data.findingId !== null,
+    );
+    expect(linked.length).toBeGreaterThan(0);
   });
 });

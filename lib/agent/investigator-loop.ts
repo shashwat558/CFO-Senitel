@@ -22,6 +22,16 @@ import {
 } from "../ai/investigator-client";
 import { executeAgentTool, getOpenAITools } from "../tools/openai";
 import type { ToolContext } from "../tools/types";
+import {
+  addContradictoryEvidence,
+  addSupportingEvidence,
+  createHypothesis,
+  hypothesisStatusSchema,
+  setConfidence,
+  setHypothesisStatus,
+  toIncidentFinding,
+  type Hypothesis,
+} from "./hypotheses";
 
 export const INVESTIGATOR_SYSTEM_PROMPT =
   "You are a CFO investigation assistant. You decide the investigation path yourself: " +
@@ -29,6 +39,10 @@ export const INVESTIGATOR_SYSTEM_PROMPT =
   "understanding of known facts vs unknowns, then either call the single most informative " +
   "next tool or — only when the evidence truly answers the question — set done:true and " +
   "give the final summary. Never call a tool you have already called with the same arguments. " +
+  "Work hypothesis-first: keep 1-2 live hypotheses (e.g. 'COGS increase caused margin decline'), " +
+  "report every turn their status (PROPOSED/INVESTIGATING/SUPPORTED/REJECTED) with confidence " +
+  "0-1 plus supporting/contradicting notes, and abandon (REJECTED) any hypothesis the evidence " +
+  "contradicts in favor of a better explanation. " +
   "Never invent numbers — every figure must come from a tool result.";
 
 // Phase 0 (UNDERSTAND -> PLAN): the agent must first frame the investigation
@@ -60,8 +74,23 @@ const PLAN_SCHEMA = {
   },
 };
 
-// Per-turn deliberation: the agent reasons about results and decides the
-// next move itself. done:true with zero tool calls is the ONLY finish signal.
+// Per-turn deliberation: the agent reasons about results, maintains its
+// hypotheses, and decides the next move itself. done:true with zero tool
+// calls is the ONLY finish signal.
+const HYPOTHESIS_UPDATE_SCHEMA = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    statement: { type: "string" },
+    status: { type: "string", enum: ["PROPOSED", "INVESTIGATING", "SUPPORTED", "REJECTED"] },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    supporting: { type: "array", items: { type: "string" } },
+    contradicting: { type: "array", items: { type: "string" } },
+  },
+  required: ["status"],
+  additionalProperties: false,
+};
+
 const DELIBERATION_SCHEMA = {
   name: "investigation_deliberation",
   schema: {
@@ -70,6 +99,7 @@ const DELIBERATION_SCHEMA = {
       thinking: { type: "string" },
       learned: { type: "array", items: { type: "string" } },
       nextFocus: { type: "string" },
+      hypotheses: { type: "array", items: HYPOTHESIS_UPDATE_SCHEMA },
       done: { type: "boolean" },
       summary: { type: "string" },
     },
@@ -77,6 +107,15 @@ const DELIBERATION_SCHEMA = {
     additionalProperties: false,
   },
 };
+
+const hypothesisUpdateSchema = z.object({
+  id: z.string().min(1).optional(),
+  statement: z.string().min(3).max(2000).optional(),
+  status: hypothesisStatusSchema,
+  confidence: z.number().min(0).max(1).optional(),
+  supporting: z.array(z.string()).default([]),
+  contradicting: z.array(z.string()).default([]),
+});
 
 export interface LoopOptions {
   db: PrismaClient;
@@ -100,6 +139,7 @@ export interface LoopResult {
   status: LoopStatus;
   answer: unknown;
   plan: InvestigationPlan | null;
+  hypotheses: Hypothesis[];
   runId: string;
   iterations: number;
   toolCallsExecuted: number;
@@ -179,6 +219,74 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
   let answer: unknown = null;
   let plan: InvestigationPlan | null = null;
 
+  // Live hypothesis registry + IncidentFinding row ids (best-effort).
+  let hypotheses: Hypothesis[] = [];
+  const findingIds = new Map<string, string>();
+
+  const persistHypothesis = async (h: Hypothesis) => {
+    try {
+      const rank = hypotheses.findIndex((x) => x.id === h.id);
+      const payload = toIncidentFinding(h, incidentId, rank);
+      const existing = findingIds.get(h.id);
+      if (existing) {
+        await db.incidentFinding.update({ where: { id: existing }, data: payload });
+      } else {
+        const row = await db.incidentFinding.create({ data: payload });
+        findingIds.set(h.id, (row as { id: string }).id);
+      }
+    } catch {
+      // Hypothesis persistence must never break the loop.
+    }
+  };
+
+  /** Fold the agent's declared hypothesis updates into the registry. */
+  const applyHypothesisUpdates = async (raw: unknown): Promise<void> => {
+    if (!Array.isArray(raw)) return;
+    for (const item of raw) {
+      const parsed = hypothesisUpdateSchema.safeParse(item);
+      if (!parsed.success) continue;
+      const u = parsed.data;
+      let h = hypotheses.find((x) => (u.id && x.id === u.id) || (u.statement && x.statement === u.statement));
+      if (!h) {
+        if (!u.statement) continue; // cannot create without a statement
+        h = createHypothesis({ id: u.id, statement: u.statement, confidence: u.confidence });
+        hypotheses.push(h);
+        await persistHypothesis(h);
+      }
+      // Walk toward the target status one valid edge at a time so every
+      // persisted state respects the lifecycle (e.g. PROPOSED -> SUPPORTED
+      // passes through INVESTIGATING).
+      try {
+        let guard = 0;
+        while (h.status !== u.status && guard < 4) {
+          guard += 1;
+          const next: Hypothesis["status"] =
+            h.status === "PROPOSED"
+              ? u.status === "REJECTED" ? "REJECTED" : "INVESTIGATING"
+              : h.status === "REJECTED"
+                ? "INVESTIGATING"
+                : u.status;
+          h = setHypothesisStatus(h, next);
+        }
+        if (h.status !== u.status) continue;
+      } catch {
+        continue; // invalid transition — ignore this update, keep old state
+      }
+      for (const note of u.supporting) h = addSupportingEvidence(h, note);
+      for (const note of u.contradicting) h = addContradictoryEvidence(h, note);
+      if (u.confidence !== undefined) h = setConfidence(h, u.confidence);
+      const finalH = h;
+      hypotheses = hypotheses.map((x) => (x.id === finalH.id ? finalH : x));
+      await persistStep({
+        input: { hypothesisId: finalH.id },
+        output: finalH,
+        reasoning: `hypothesis ${finalH.id} -> ${finalH.status} (confidence ${finalH.confidence}): ${finalH.statement}`,
+        status: "OK",
+      });
+      await persistHypothesis(finalH);
+    }
+  };
+
   const callLlm = async (
     schema: typeof PLAN_SCHEMA | typeof DELIBERATION_SCHEMA,
     useTools: boolean,
@@ -243,13 +351,14 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
         status: "OK",
       });
 
-      const deliberation = (response.content ?? {}) as { done?: unknown };
+      const deliberation = (response.content ?? {}) as { done?: unknown; hypotheses?: unknown };
+      await applyHypothesisUpdates(deliberation.hypotheses);
       if (response.toolCalls.length === 0) {
         // The ONLY finish signal: no further tool needed AND done:true.
         if (deliberation.done === true) {
           answer = response.content;
-          await finishRun("COMPLETED", { answer, plan, iterations, toolCallsExecuted });
-          return { status: "COMPLETED", answer, plan, runId, iterations, toolCallsExecuted };
+          await finishRun("COMPLETED", { answer, plan, hypotheses, iterations, toolCallsExecuted });
+          return { status: "COMPLETED", answer, plan, hypotheses, runId, iterations, toolCallsExecuted };
         }
         // Premature stop — nudge the agent to choose a tool or finish honestly.
         messages.push({
@@ -284,12 +393,16 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
           status: result.ok ? "OK" : "ERROR",
         });
 
-        // Evidence row for every tool execution (success or failure).
+        // Evidence row for every tool execution (success or failure),
+        // linked to the active hypothesis when there is one.
+        const active = [...hypotheses].reverse().find((x) => x.status === "INVESTIGATING")
+          ?? [...hypotheses].reverse().find((x) => x.status === "PROPOSED");
+        const findingId = active ? (findingIds.get(active.id) ?? null) : null;
         try {
           await db.incidentEvidence.create({
             data: {
               incidentId,
-              findingId: null,
+              findingId,
               toolName: tc.name,
               input: { args: tc.parsedArgs ?? tc.arguments } as never,
               output: (result ?? {}) as never,
@@ -310,12 +423,12 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     }
 
     // Max iterations reached without a final answer.
-    await finishRun("COMPLETED", { answer: null, plan, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
-    return { status: "MAX_ITERATIONS", answer: null, plan, runId, iterations, toolCallsExecuted };
+    await finishRun("COMPLETED", { answer: null, plan, hypotheses, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
+    return { status: "MAX_ITERATIONS", answer: null, plan, hypotheses, runId, iterations, toolCallsExecuted };
   } catch (err) {
     if (signal?.aborted || (err instanceof InvestigatorError && err.message === "Investigation cancelled")) {
-      await finishRun("CANCELLED", { plan, iterations, toolCallsExecuted });
-      return { status: "CANCELLED", answer: null, plan, runId, iterations, toolCallsExecuted };
+      await finishRun("CANCELLED", { plan, hypotheses, iterations, toolCallsExecuted });
+      return { status: "CANCELLED", answer: null, plan, hypotheses, runId, iterations, toolCallsExecuted };
     }
     await persistStep({
       reasoning: err instanceof Error ? err.message : String(err),
@@ -324,6 +437,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     await finishRun("FAILED", {
       error: err instanceof Error ? err.message : String(err),
       plan,
+      hypotheses,
       iterations,
       toolCallsExecuted,
     });
@@ -331,6 +445,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
       status: "FAILED",
       answer: null,
       plan,
+      hypotheses,
       runId,
       iterations,
       toolCallsExecuted,

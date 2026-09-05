@@ -66,6 +66,19 @@ export interface StructuredRequest {
   config?: Partial<InvestigatorModelConfig>;
 }
 
+export type LlmMessage =
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string | null; toolCalls?: Array<{ id: string; name: string; arguments: string }> }
+  | { role: "tool"; toolCallId: string; name: string; content: string };
+
+export interface ConversationRequest {
+  messages: LlmMessage[];
+  responseSchema: StructuredResponseSchema;
+  tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+  toolChoice?: OpenAI.Chat.Completions.ChatCompletionToolChoiceOption;
+  config?: Partial<InvestigatorModelConfig>;
+}
 export interface InvestigatorToolCall {
   id: string;
   name: string;
@@ -156,8 +169,34 @@ export interface InvestigatorClientOptions {
   config?: Partial<InvestigatorModelConfig>;
 }
 
-function safeParseArgs(raw: string): unknown {
-  try {
+/** Convert loop-owned messages to the OpenAI chat wire format. */
+function toApiMessages(messages: LlmMessage[]): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+  return messages.map((m) => {
+    switch (m.role) {
+      case "system":
+      case "user":
+        return { role: m.role, content: m.content };
+      case "assistant":
+        return {
+          role: "assistant",
+          content: m.content,
+          ...(m.toolCalls
+            ? {
+                tool_calls: m.toolCalls.map((tc) => ({
+                  id: tc.id,
+                  type: "function" as const,
+                  function: { name: tc.name, arguments: tc.arguments },
+                })),
+              }
+            : {}),
+        };
+      case "tool":
+        return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+    }
+  });
+}
+
+function safeParseArgs(raw: string): unknown {  try {
     return JSON.parse(raw);
   } catch {
     return null;
@@ -197,6 +236,27 @@ export class InvestigatorClient {
    * business logic, no tool execution, no follow-up loop.
    */
   async requestStructured(req: StructuredRequest, signal?: AbortSignal): Promise<StructuredResponse> {
+    return this.continueConversation(
+      {
+        messages: [
+          { role: "system", content: req.systemPrompt },
+          { role: "user", content: req.userPrompt },
+        ],
+        responseSchema: req.responseSchema,
+        tools: req.tools,
+        toolChoice: req.toolChoice,
+        config: req.config,
+      },
+      signal,
+    );
+  }
+
+  /**
+   * Continue a multi-turn conversation: sends the full message history
+   * (including prior assistant tool calls and tool results) and returns the
+   * next structured response. Used by the investigator tool loop.
+   */
+  async continueConversation(req: ConversationRequest, signal?: AbortSignal): Promise<StructuredResponse> {
     const config = resolveModelConfig({ ...this.baseConfig, ...req.config });
     let client: OpenAI;
     try {
@@ -217,10 +277,7 @@ export class InvestigatorClient {
           model: config.model,
           temperature: config.temperature,
           max_tokens: config.maxTokens,
-          messages: [
-            { role: "system", content: req.systemPrompt },
-            { role: "user", content: req.userPrompt },
-          ],
+          messages: toApiMessages(req.messages),
           response_format: {
             type: "json_schema",
             json_schema: {

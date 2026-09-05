@@ -16,6 +16,9 @@ export interface RecordEvidenceInput {
 export async function recordEvidence(db: PrismaClient, e: RecordEvidenceInput) {
   if (!e.incidentId) throw new Error("incidentId is required");
   if (!e.toolName) throw new Error("toolName is required");
+  if (typeof e.summary !== "string" || e.summary.length === 0) {
+    throw new Error("summary is required");
+  }
   return db.incidentEvidence.create({
     data: {
       incidentId: e.incidentId,

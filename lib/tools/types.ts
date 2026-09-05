@@ -19,14 +19,14 @@ export class ToolError extends Error {
   }
 }
 
-export interface ToolDefinition<TInput = never, TOutput = unknown> {
+export interface ToolDefinition<TInput = unknown, TOutput = unknown> {
   name: string;
   description: string;
   // ZodTypeAny on purpose: tool schemas use defaults/refines whose
   // input/output types differ (e.g. limit defaults to 50). The registry
   // validates with safeParse, so strict generic variance adds no safety.
   inputSchema: z.ZodTypeAny;
-  execute: (input: never, ctx: ToolContext) => Promise<TOutput>;
+  execute: (input: TInput, ctx: ToolContext) => Promise<TOutput>;
 }
 
 /** Best-effort audit log. Never fails the tool call itself. */

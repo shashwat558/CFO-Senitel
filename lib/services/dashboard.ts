@@ -4,21 +4,25 @@
 import type { PrismaClient } from "@prisma/client";
 import { fetchMonthlyPnl, fetchVendorSpend, getPeriodBounds } from "../financial/pnl";
 import { calculateVariance, calculateVariancePercent } from "../financial/calculations";
+import { SEED_YEAR } from "../seed/constants";
 
-const TREND_YEAR = 2024;
+// Seed year is the default trend window for the Phase-1 demo dataset.
+// Pass an explicit year to override (keeps UI from going stale in 2026+).
+const DEFAULT_TREND_YEAR = SEED_YEAR;
 
-export async function getDashboardData(db: PrismaClient, orgId: string) {
+export async function getDashboardData(db: PrismaClient, orgId: string, trendYear = DEFAULT_TREND_YEAR) {
+  if (!orgId) throw new Error("orgId is required");
+  // Parallelize the 12 monthly P&L fetches (was 12 sequential round-trips).
+  const months = await Promise.all(
+    Array.from({ length: 12 }, (_, i) => fetchMonthlyPnl(db, orgId, trendYear, i + 1))
+  );
   const trend: Array<{
     year: number; month: number; revenue: number; cogs: number;
     grossProfit: number; grossMargin: number; netIncome: number;
-  }> = [];
-  for (let m = 1; m <= 12; m++) {
-    const p = await fetchMonthlyPnl(db, orgId, TREND_YEAR, m);
-    trend.push({
-      year: TREND_YEAR, month: m, revenue: p.revenue, cogs: p.cogs,
-      grossProfit: p.grossProfit, grossMargin: p.grossMargin, netIncome: p.netIncome,
-    });
-  }
+  }> = months.map((p, i) => ({
+    year: trendYear, month: i + 1, revenue: p.revenue, cogs: p.cogs,
+    grossProfit: p.grossProfit, grossMargin: p.grossMargin, netIncome: p.netIncome,
+  }));
   const latest = trend[trend.length - 1];
   const prior = trend[trend.length - 2];
   const august = trend.find((t) => t.month === 8) ?? null;

@@ -1,14 +1,15 @@
 import { z } from "zod";
+import { orgIdSchema } from "../validation/common";
 import { auditToolCall, ensureOrgMatch, ToolError, type ToolContext, type ToolDefinition } from "./types";
 
 export const getContractInput = z
   .object({
-    orgId: z.string().min(1),
+    orgId: orgIdSchema,
     contractId: z.string().min(1).optional(),
     contractNumber: z.string().min(1).optional(),
     vendorId: z.string().min(1).optional(),
   })
-  .refine((v) => v.contractId ?? v.contractNumber ?? v.vendorId, {
+  .refine((v) => Boolean(v.contractId ?? v.contractNumber ?? v.vendorId), {
     message: "provide at least one of contractId, contractNumber, vendorId",
   });
 
@@ -32,6 +33,7 @@ async function run(input: GetContractInput, ctx: ToolContext) {
     where: { orgId: input.orgId, vendorId: input.vendorId! },
     include: { vendor: true },
     orderBy: { startDate: "desc" },
+    take: 50,
   });
   if (contracts.length === 0) throw new ToolError("NOT_FOUND", "no contracts for vendor");
   await auditToolCall(ctx, "getContract", input, true);

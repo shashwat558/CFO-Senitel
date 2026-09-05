@@ -6,8 +6,13 @@
 // All currency math rounds to 2 decimal places (cents).
 
 export function round2(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  if (typeof n !== "number" || !Number.isFinite(n)) {
+    throw new Error(`round2 expects a finite number, got ${String(n)}`);
+  }
+  // Symmetric half-up to 2dp: EPSILON nudges binary-float .005 cases over
+  // the rounding boundary without biasing negatives.
+  const adjusted = n >= 0 ? n + Number.EPSILON : n - Number.EPSILON;
+  return Math.round(adjusted * 100) / 100;
 }
 
 function assertFinite(name: string, value: number): void {
@@ -26,6 +31,9 @@ export function calculateGrossProfit(revenue: number, cogs: number): number {
 /**
  * Gross margin as a percentage in 0–100 (e.g. 40.25 means 40.25%).
  * Returns 0 when revenue is 0 (no division by zero, no NaN leaking).
+ * Negative revenue or COGS is mathematically computed but indicates a data
+ * problem (credit memos, mis-postings) — callers should treat margins
+ * outside 0–100 as a signal to investigate source rows.
  */
 export function calculateGrossMargin(revenue: number, cogs: number): number {
   assertFinite("revenue", revenue);
@@ -43,11 +51,10 @@ export function calculateVariance(current: number, previous: number): number {
 
 /**
  * Variance percent relative to `previous`: ((current − previous) / |previous|) * 100.
- * Returns 0 when previous is 0 and current is 0; returns +Infinity-sign-safe
- * `current > 0 ? 100 : current < 0 ? -100 : 0`... Actually we return 0 when
- * previous === 0 to stay deterministic and avoid Infinity in JSON/APIs.
- * Callers needing "new expense from zero" semantics should check `previous === 0`
- * explicitly. Documented here so behavior is never surprising.
+ * Returns 0 when previous === 0 (both 0→0 and new-from-zero→0) to stay
+ * deterministic and avoid Infinity in JSON/APIs. This intentionally masks the
+ * "new from zero" signal — callers needing spike detection must check
+ * `previous === 0 && current !== 0` explicitly before calling.
  */
 export function calculateVariancePercent(current: number, previous: number): number {
   assertFinite("current", current);
@@ -63,7 +70,12 @@ export function calculateVendorContribution(
 ): number {
   assertFinite("vendorSpend", vendorSpend);
   assertFinite("totalSpend", totalSpend);
+  if (vendorSpend < 0 || totalSpend < 0) {
+    throw new Error("vendorSpend and totalSpend must be >= 0");
+  }
   if (totalSpend === 0) return 0;
+  // Values >100 indicate a data error (vendorSpend > totalSpend) — returned
+  // as-is so reconciliation checks can catch it, never clamped silently.
   return round2((vendorSpend / totalSpend) * 100);
 }
 
@@ -100,14 +112,19 @@ export function calculateFinancialImpact(input: FinancialImpactInput): Financial
   }
   if (quantity < 0) throw new Error("quantity must be >= 0");
 
+  // Single-rounding invariant: baseline/actual costs are rounded once, and
+  // totalImpact is derived from those rounded costs so that
+  // totalImpact === actualCost − baselineCost exactly (no qty*0.005 drift).
+  const baselineCost = round2(baselineUnitPrice * quantity);
+  const actualCost = round2(actualUnitPrice * quantity);
   const unitVariance = round2(actualUnitPrice - baselineUnitPrice);
   const unitVariancePercent =
     baselineUnitPrice === 0 ? 0 : round2((unitVariance / baselineUnitPrice) * 100);
   return {
     unitVariance,
     unitVariancePercent,
-    totalImpact: round2(unitVariance * quantity),
-    baselineCost: round2(baselineUnitPrice * quantity),
-    actualCost: round2(actualUnitPrice * quantity),
+    totalImpact: round2(actualCost - baselineCost),
+    baselineCost,
+    actualCost,
   };
 }

@@ -39,14 +39,16 @@ export interface CustomerSpec {
   code: string;
   name: string;
   share: number; // share of monthly revenue, sums to 1
+  segment?: string;
+  region?: string;
 }
 
 export const CUSTOMERS: CustomerSpec[] = [
-  { code: "AUTOFAB", name: "AutoFab Systems", share: 0.28 },
-  { code: "BUILDRIGHT", name: "BuildRight Corp", share: 0.24 },
-  { code: "HEARTLAND", name: "Heartland Appliances", share: 0.2 },
-  { code: "NORTHSTAR", name: "NorthStar Equipment", share: 0.16 },
-  { code: "LAKESIDE", name: "Lakeside Motors", share: 0.12 },
+  { code: "AUTOFAB", name: "AutoFab Systems", share: 0.28, segment: "MANUFACTURING", region: "US-MIDWEST" },
+  { code: "BUILDRIGHT", name: "BuildRight Corp", share: 0.24, segment: "MANUFACTURING", region: "US-MIDWEST" },
+  { code: "HEARTLAND", name: "Heartland Appliances", share: 0.2, segment: "MANUFACTURING", region: "US-MIDWEST" },
+  { code: "NORTHSTAR", name: "NorthStar Equipment", share: 0.16, segment: "MANUFACTURING", region: "US-MIDWEST" },
+  { code: "LAKESIDE", name: "Lakeside Motors", share: 0.12, segment: "MANUFACTURING", region: "US-MIDWEST" },
 ];
 
 export const ACCOUNTS = [

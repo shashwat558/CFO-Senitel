@@ -1,17 +1,18 @@
 import { z } from "zod";
 import { fetchMonthlyPnl } from "../financial/pnl";
 import { calculateVariance, calculateVariancePercent } from "../financial/calculations";
+import { monthSchema, orgIdSchema, yearSchema } from "../validation/common";
 import { auditToolCall, ensureOrgMatch, type ToolContext, type ToolDefinition } from "./types";
 
 const METRICS = ["revenue", "cogs", "opex", "grossProfit", "grossMargin", "netIncome"] as const;
 export type CompareMetric = (typeof METRICS)[number];
 
 export const comparePeriodsInput = z.object({
-  orgId: z.string().min(1),
-  currentYear: z.number().int().min(2000).max(2100),
-  currentMonth: z.number().int().min(1).max(12),
-  previousYear: z.number().int().min(2000).max(2100),
-  previousMonth: z.number().int().min(1).max(12),
+  orgId: orgIdSchema,
+  currentYear: yearSchema,
+  currentMonth: monthSchema,
+  previousYear: yearSchema,
+  previousMonth: monthSchema,
   metric: z.enum(METRICS),
 });
 

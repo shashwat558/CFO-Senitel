@@ -4,7 +4,7 @@
 // and audit-logs the call.
 
 import type { ToolContext, ToolDefinition } from "./types";
-import { ToolError } from "./types";
+import { auditToolCall, ToolError } from "./types";
 import { getPnlTool } from "./getPnl";
 import { getVendorSpendTool } from "./getVendorSpend";
 import { comparePeriodsTool } from "./comparePeriods";
@@ -45,5 +45,21 @@ export async function executeTool(
   if (!parsed.success) {
     throw new ToolError("VALIDATION", `invalid input for ${name}: ${parsed.error.message}`);
   }
-  return tool.execute(parsed.data as never, ctx);
+  try {
+    return await tool.execute(parsed.data as never, ctx);
+  } catch (err) {
+    // Best-effort failure audit so failed validations and ToolErrors are
+    // visible in AuditLog (success paths audit inside each tool).
+    if (ctx.audit !== false) {
+      try {
+        await auditToolCall(ctx, name, rawInput, false, {
+          error: err instanceof Error ? err.message : String(err),
+          code: (err as { code?: unknown }).code ?? "ERROR",
+        });
+      } catch {
+        // Audit must never break tool execution.
+      }
+    }
+    throw err;
+  }
 }

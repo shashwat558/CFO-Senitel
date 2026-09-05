@@ -339,7 +339,9 @@ model JournalEntry {
   date        DateTime
   memo        String
   source      TransactionSource @default(MANUAL)
-  status      JournalStatus @default(POSTED)
+  // DRAFT default: omitted status must never silently hit the P&L.
+  // fetchPnl only aggregates POSTED entries.
+  status      JournalStatus @default(DRAFT)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 

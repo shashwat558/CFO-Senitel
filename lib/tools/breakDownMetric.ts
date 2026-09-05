@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { fetchMonthlyPnl, fetchVendorSpend, getPeriodBounds } from "../financial/pnl";
 import { calculateVendorContribution, round2 } from "../financial/calculations";
-import { auditToolCall, ensureOrgMatch, type ToolContext, type ToolDefinition } from "./types";
+import { monthSchema, orgIdSchema, yearSchema } from "../validation/common";
+import { auditToolCall, ensureOrgMatch, ToolError, type ToolContext, type ToolDefinition } from "./types";
 
 export const breakDownMetricInput = z.object({
-  orgId: z.string().min(1),
+  orgId: orgIdSchema,
   metric: z.enum(["cogs", "revenue", "opex"]),
-  year: z.number().int().min(2000).max(2100),
-  month: z.number().int().min(1).max(12),
+  year: yearSchema,
+  month: monthSchema,
 });
 
 export type BreakDownMetricInput = z.infer<typeof breakDownMetricInput>;
@@ -41,17 +42,27 @@ async function run(input: BreakDownMetricInput, ctx: ToolContext) {
       },
       include: { customer: true },
       orderBy: { issueDate: "asc" },
+      take: 500,
     });
-    const map = new Map<string, { key: string; amount: number; invoiceCount: number }>();
+    // Key by customerId (not name) so same-named customers never merge;
+    // null-customer rows share one explicit Unknown bucket.
+    const map = new Map<string, { key: string; customerId: string | null; amount: number; invoiceCount: number }>();
+    let rawTotal = 0;
     for (const inv of invoices) {
-      const key = inv.customer?.name ?? "Unknown";
-      const cur = map.get(key) ?? { key, amount: 0, invoiceCount: 0 };
-      cur.amount = round2(cur.amount + Number(inv.total));
+      const amount = Number(inv.total);
+      if (!Number.isFinite(amount)) throw new ToolError("DATA", "invalid invoice total");
+      rawTotal += amount;
+      const idKey = inv.customerId ?? "unknown";
+      const label = inv.customer?.name ?? "Unknown";
+      const cur = map.get(idKey) ?? { key: label, customerId: inv.customerId ?? null, amount: 0, invoiceCount: 0 };
+      cur.amount += amount;
       cur.invoiceCount += 1;
-      map.set(key, cur);
+      map.set(idKey, cur);
     }
-    const rows = [...map.values()].sort((a, b) => b.amount - a.amount);
-    const total = round2(rows.reduce((s, r) => s + r.amount, 0));
+    const rows = [...map.values()]
+      .map((r) => ({ ...r, amount: round2(r.amount) }))
+      .sort((a, b) => b.amount - a.amount || (a.key < b.key ? -1 : 1));
+    const total = round2(rawTotal);
     const output = {
       metric: input.metric as string, total,
       rows: rows.map((r) => ({ ...r, contributionPercent: calculateVendorContribution(r.amount, total) })),

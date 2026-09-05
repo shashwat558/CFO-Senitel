@@ -70,7 +70,12 @@ export interface IncidentRow {
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
-const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86400000);
+// UTC-safe day arithmetic (avoids DST pitfalls of +86400000 on local dates).
+const addDays = (d: Date, n: number) => {
+  const copy = new Date(d.getTime());
+  copy.setUTCDate(copy.getUTCDate() + n);
+  return copy;
+};
 
 export function buildDataset(seed = SEED): SeedDataset {
   const rng: Rng = createRng(seed);
@@ -135,7 +140,10 @@ export function buildDataset(seed = SEED): SeedDataset {
       const isIncidentMonth = m === INCIDENT.month && v.code === INCIDENT.vendorCode;
       // Flat baseline: mean-reverting ±3% noise with NO cumulative trend, so the
       // August price spike reads as a sharp V (dip + recovery), not a drift.
-      const qty = money(v.baseQtyPerMonth * (1 + range(rng, -0.03, 0.03)));
+      // UNIT-measured materials (brackets, harnesses) must stay whole units;
+      // TON/KG/SHIPMENT materials may be fractional.
+      const rawQty = v.baseQtyPerMonth * (1 + range(rng, -0.03, 0.03));
+      const qty = v.unitOfMeasure === "UNIT" ? Math.max(1, Math.round(rawQty)) : money(rawQty);
       const baseNoise = 1 + range(rng, -0.015, 0.015);
       const unitPrice = money(
         isIncidentMonth
@@ -230,12 +238,12 @@ export function buildDataset(seed = SEED): SeedDataset {
     const opexDate = utc(year, m, 28);
     const utilities = money(MONTHLY_OPEX.utilitiesBase * (1 + range(rng, -0.08, 0.08)));
     const opexLines = [
-      { acct: "6000", amt: MONTHLY_OPEX.payroll, memo: `Payroll ${mm}` },
-      { acct: "6010", amt: MONTHLY_OPEX.rent, memo: `Rent ${mm}` },
-      { acct: "6020", amt: utilities, memo: `Utilities ${mm}` },
+      { acct: "6000", amt: MONTHLY_OPEX.payroll, memo: `Payroll ${mm}`, source: "PAYROLL" },
+      { acct: "6010", amt: MONTHLY_OPEX.rent, memo: `Rent ${mm}`, source: "MANUAL" },
+      { acct: "6020", amt: utilities, memo: `Utilities ${mm}`, source: "MANUAL" },
     ];
     for (const l of opexLines) {
-      const je = nextJe(opexDate, l.memo, "PAYROLL");
+      const je = nextJe(opexDate, l.memo, l.source);
       addLine(je, l.acct, l.amt, 0, { description: l.memo });
       addLine(je, "1000", 0, l.amt, { description: l.memo });
     }
@@ -249,7 +257,7 @@ export function buildDataset(seed = SEED): SeedDataset {
     })),
     customers: CUSTOMERS.map((c) => ({
       id: `customer_${c.code.toLowerCase()}`, code: c.code, name: c.name,
-      segment: "MANUFACTURING", region: "US-MIDWEST",
+      segment: c.segment ?? "MANUFACTURING", region: c.region ?? "US-MIDWEST",
     })),
     accounts: ACCOUNTS.map((a) => ({ id: `acct_${a.code}`, ...a })),
     contracts,
@@ -265,8 +273,11 @@ export function buildDataset(seed = SEED): SeedDataset {
       type: "GROSS_MARGIN_DECLINE",
       status: "OPEN",
       severity: "HIGH",
-      periodStart: utc(year, 8, 1),
-      periodEnd: utc(year, 9, 1),
+      periodStart: utc(INCIDENT.year, INCIDENT.month, 1),
+      periodEnd:
+        INCIDENT.month >= 12
+          ? utc(INCIDENT.year + 1, 1, 1)
+          : utc(INCIDENT.year, INCIDENT.month + 1, 1),
     },
   };
 }

@@ -1,13 +1,18 @@
 import { z } from "zod";
 import { calculateFinancialImpact, calculateVariancePercent, round2 } from "../financial/calculations";
+import { orgIdSchema } from "../validation/common";
 import { auditToolCall, ensureOrgMatch, ToolError, type ToolContext, type ToolDefinition } from "./types";
 
-export const compareVendorPricesInput = z.object({
-  orgId: z.string().min(1),
-  vendorId: z.string().min(1),
-  startDate: z.string().datetime({ offset: true }),
-  endDate: z.string().datetime({ offset: true }),
-});
+export const compareVendorPricesInput = z
+  .object({
+    orgId: orgIdSchema,
+    vendorId: z.string().min(1),
+    startDate: z.string().datetime({ offset: true }),
+    endDate: z.string().datetime({ offset: true }),
+  })
+  .refine((v) => new Date(v.startDate).getTime() < new Date(v.endDate).getTime(), {
+    message: "startDate must be before endDate",
+  });
 
 export type CompareVendorPricesInput = z.infer<typeof compareVendorPricesInput>;
 
@@ -15,24 +20,28 @@ async function run(input: CompareVendorPricesInput, ctx: ToolContext) {
   ensureOrgMatch(ctx, input.orgId);
   const start = new Date(input.startDate);
   const end = new Date(input.endDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+    throw new ToolError("INVALID_RANGE", "invalid date range: startDate must be before endDate");
+  }
 
-  const contract = await ctx.db.contract.findFirst({
-    where: { orgId: input.orgId, vendorId: input.vendorId, status: "ACTIVE" },
-    orderBy: { startDate: "desc" },
-    include: { vendor: true },
-  });
+  const [contract, invoices] = await Promise.all([
+    ctx.db.contract.findFirst({
+      where: { orgId: input.orgId, vendorId: input.vendorId, status: "ACTIVE" },
+      orderBy: { startDate: "desc" },
+      include: { vendor: true },
+    }),
+    ctx.db.invoice.findMany({
+      where: {
+        orgId: input.orgId, vendorId: input.vendorId, type: "AP",
+        status: { not: "VOID" },
+        issueDate: { gte: start, lt: end },
+        unitPrice: { not: null },
+        quantity: { not: null },
+      },
+      orderBy: { issueDate: "asc" },
+    }),
+  ]);
   if (!contract) throw new ToolError("NOT_FOUND", "no active contract for vendor");
-
-  const invoices = await ctx.db.invoice.findMany({
-    where: {
-      orgId: input.orgId, vendorId: input.vendorId, type: "AP",
-      status: { not: "VOID" },
-      issueDate: { gte: start, lt: end },
-      unitPrice: { not: null },
-      quantity: { not: null },
-    },
-    orderBy: { issueDate: "asc" },
-  });
   if (invoices.length === 0) throw new ToolError("NO_DATA", "no priced AP invoices in range");
 
   const prices = invoices.map((i) => Number(i.unitPrice));
@@ -58,8 +67,8 @@ async function run(input: CompareVendorPricesInput, ctx: ToolContext) {
     invoiceCount: invoices.length,
     totalQuantity: totalQty,
     avgUnitPrice: avgPrice,
-    minUnitPrice: Math.min(...prices),
-    maxUnitPrice: Math.max(...prices),
+    minUnitPrice: prices.reduce((m, p) => Math.min(m, p), Number.POSITIVE_INFINITY),
+    maxUnitPrice: prices.reduce((m, p) => Math.max(m, p), Number.NEGATIVE_INFINITY),
     unitVariance: impact.unitVariance,
     unitVariancePercent: impact.unitVariancePercent,
     avgVsContractPercent: calculateVariancePercent(avgPrice, baseline),

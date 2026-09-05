@@ -1,14 +1,19 @@
 import { z } from "zod";
 import { fetchVendorSpend } from "../financial/pnl";
 import { calculateVendorContribution } from "../financial/calculations";
-import { auditToolCall, ensureOrgMatch, type ToolContext, type ToolDefinition } from "./types";
+import { orgIdSchema } from "../validation/common";
+import { auditToolCall, ensureOrgMatch, ToolError, type ToolContext, type ToolDefinition } from "./types";
 
-export const getVendorSpendInput = z.object({
-  orgId: z.string().min(1),
-  startDate: z.string().datetime({ offset: true }),
-  endDate: z.string().datetime({ offset: true }),
-  vendorId: z.string().min(1).optional(),
-});
+export const getVendorSpendInput = z
+  .object({
+    orgId: orgIdSchema,
+    startDate: z.string().datetime({ offset: true }),
+    endDate: z.string().datetime({ offset: true }),
+    vendorId: z.string().min(1).optional(),
+  })
+  .refine((v) => new Date(v.startDate).getTime() < new Date(v.endDate).getTime(), {
+    message: "startDate must be before endDate",
+  });
 
 export type GetVendorSpendInput = z.infer<typeof getVendorSpendInput>;
 
@@ -17,7 +22,7 @@ async function run(input: GetVendorSpendInput, ctx: ToolContext) {
   const start = new Date(input.startDate);
   const end = new Date(input.endDate);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
-    throw new Error("invalid date range: startDate must be before endDate");
+    throw new ToolError("INVALID_RANGE", "invalid date range: startDate must be before endDate");
   }
   const { rows, total } = await fetchVendorSpend(ctx.db, input.orgId, start, end, input.vendorId);
   const output = {

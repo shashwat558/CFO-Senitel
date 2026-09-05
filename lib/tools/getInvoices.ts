@@ -1,23 +1,36 @@
 import { z } from "zod";
-import { auditToolCall, ensureOrgMatch, type ToolContext, type ToolDefinition } from "./types";
+import { orgIdSchema } from "../validation/common";
+import { auditToolCall, ensureOrgMatch, ToolError, type ToolContext, type ToolDefinition } from "./types";
 
-export const getInvoicesInput = z.object({
-  orgId: z.string().min(1),
-  vendorId: z.string().min(1).optional(),
-  customerId: z.string().min(1).optional(),
-  type: z.enum(["AP", "AR"]).optional(),
-  status: z.enum(["DRAFT", "SENT", "PAID", "OVERDUE", "VOID"]).optional(),
-  startDate: z.string().datetime({ offset: true }).optional(),
-  endDate: z.string().datetime({ offset: true }).optional(),
-  limit: z.number().int().min(1).max(100).default(50),
-});
+export const getInvoicesInput = z
+  .object({
+    orgId: orgIdSchema,
+    vendorId: z.string().min(1).optional(),
+    customerId: z.string().min(1).optional(),
+    type: z.enum(["AP", "AR"]).optional(),
+    status: z.enum(["DRAFT", "SENT", "PAID", "OVERDUE", "VOID"]).optional(),
+    startDate: z.string().datetime({ offset: true }).optional(),
+    endDate: z.string().datetime({ offset: true }).optional(),
+    limit: z.number().int().min(1).max(100).default(50),
+  })
+  .refine(
+    (v) => (v.startDate !== undefined) === (v.endDate !== undefined),
+    { message: "provide both startDate and endDate or neither" }
+  )
+  .refine(
+    (v) => {
+      if (v.startDate && v.endDate) return new Date(v.startDate).getTime() < new Date(v.endDate).getTime();
+      return true;
+    },
+    { message: "startDate must be before endDate" }
+  );
 
 export type GetInvoicesInput = z.infer<typeof getInvoicesInput>;
 
 async function run(input: GetInvoicesInput, ctx: ToolContext) {
   ensureOrgMatch(ctx, input.orgId);
   if ((input.startDate && !input.endDate) || (!input.startDate && input.endDate)) {
-    throw new Error("provide both startDate and endDate or neither");
+    throw new ToolError("VALIDATION", "provide both startDate and endDate or neither");
   }
   const invoices = await ctx.db.invoice.findMany({
     where: {

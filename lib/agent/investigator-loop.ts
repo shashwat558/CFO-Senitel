@@ -14,6 +14,7 @@
 //   - IncidentEvidence: one row per tool execution (input/output/summary).
 
 import type { PrismaClient } from "@prisma/client";
+import { z } from "zod";
 import {
   InvestigatorError,
   type InvestigatorClient,
@@ -23,21 +24,56 @@ import { executeAgentTool, getOpenAITools } from "../tools/openai";
 import type { ToolContext } from "../tools/types";
 
 export const INVESTIGATOR_SYSTEM_PROMPT =
-  "You are a CFO investigation assistant. Answer the user's financial question " +
-  "by calling the provided tools. Reason step by step, call one tool at a time, " +
-  "and only give the final answer as JSON once you have enough evidence. " +
+  "You are a CFO investigation assistant. You decide the investigation path yourself: " +
+  "no step order is prescribed. Each turn, study ALL prior tool results, update your " +
+  "understanding of known facts vs unknowns, then either call the single most informative " +
+  "next tool or — only when the evidence truly answers the question — set done:true and " +
+  "give the final summary. Never call a tool you have already called with the same arguments. " +
   "Never invent numbers — every figure must come from a tool result.";
 
-const ANSWER_SCHEMA = {
-  name: "investigation_answer",
+// Phase 0 (UNDERSTAND -> PLAN): the agent must first frame the investigation
+// before touching any tool. Nothing here hardcodes a tool sequence.
+export const investigationPlanSchema = z.object({
+  objective: z.string().min(1),
+  period: z.string().min(1),
+  metric: z.string().min(1),
+  knownFacts: z.array(z.string()).default([]),
+  unknowns: z.array(z.string()).default([]),
+  initialPlan: z.array(z.string()).min(1),
+});
+export type InvestigationPlan = z.infer<typeof investigationPlanSchema>;
+
+const PLAN_SCHEMA = {
+  name: "investigation_plan",
   schema: {
     type: "object",
     properties: {
-      summary: { type: "string" },
-      findings: { type: "array", items: { type: "string" } },
-      needsMoreEvidence: { type: "boolean" },
+      objective: { type: "string" },
+      period: { type: "string" },
+      metric: { type: "string" },
+      knownFacts: { type: "array", items: { type: "string" } },
+      unknowns: { type: "array", items: { type: "string" } },
+      initialPlan: { type: "array", items: { type: "string" } },
     },
-    required: ["summary"],
+    required: ["objective", "period", "metric", "initialPlan"],
+    additionalProperties: false,
+  },
+};
+
+// Per-turn deliberation: the agent reasons about results and decides the
+// next move itself. done:true with zero tool calls is the ONLY finish signal.
+const DELIBERATION_SCHEMA = {
+  name: "investigation_deliberation",
+  schema: {
+    type: "object",
+    properties: {
+      thinking: { type: "string" },
+      learned: { type: "array", items: { type: "string" } },
+      nextFocus: { type: "string" },
+      done: { type: "boolean" },
+      summary: { type: "string" },
+    },
+    required: ["thinking", "done"],
     additionalProperties: false,
   },
 };
@@ -63,6 +99,7 @@ export type LoopStatus = "COMPLETED" | "MAX_ITERATIONS" | "FAILED" | "CANCELLED"
 export interface LoopResult {
   status: LoopStatus;
   answer: unknown;
+  plan: InvestigationPlan | null;
   runId: string;
   iterations: number;
   toolCallsExecuted: number;
@@ -140,28 +177,62 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
   let iterations = 0;
   let toolCallsExecuted = 0;
   let answer: unknown = null;
+  let plan: InvestigationPlan | null = null;
+
+  const callLlm = async (
+    schema: typeof PLAN_SCHEMA | typeof DELIBERATION_SCHEMA,
+    useTools: boolean,
+  ) => {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await llm.continueConversation(
+          { messages, responseSchema: schema, ...(useTools ? { tools } : {}) },
+          signal,
+        );
+      } catch (err) {
+        const retryable = err instanceof InvestigatorError && err.retryable;
+        attempt += 1;
+        if (!retryable || attempt > maxLlmRetries) throw err;
+      }
+    }
+  };
 
   try {
+    // --- Phase 0: UNDERSTAND -> PLAN (no tools; frame before acting) ---
+    throwIfCancelled(signal);
+    const planResponse = await callLlm(PLAN_SCHEMA, false);
+    const parsedPlan = investigationPlanSchema.safeParse(planResponse.content);
+    plan = parsedPlan.success
+      ? parsedPlan.data
+      : {
+          objective: question,
+          period: "unknown",
+          metric: "unknown",
+          knownFacts: [],
+          unknowns: ["plan was malformed; proceeding from the raw question"],
+          initialPlan: ["gather baseline figures, then follow the evidence"],
+        };
+    await persistStep({
+      input: { phase: "PLAN" },
+      output: plan,
+      reasoning: `plan: ${plan.objective} | unknowns: ${plan.unknowns.join("; ")}`,
+      status: parsedPlan.success ? "OK" : "ERROR",
+    });
+    messages.push({
+      role: "user",
+      content:
+        `Agreed investigation plan: ${JSON.stringify(plan)}. ` +
+        `Follow it loosely — adapt whenever tool results surprise you. ` +
+        `Now investigate, choosing each next tool yourself based on results.`,
+    });
+
     while (iterations < maxIterations) {
       throwIfCancelled(signal);
       iterations += 1;
 
-      // --- LLM turn (with retries for transient failures) ---
-      let attempt = 0;
-      let response;
-      for (;;) {
-        try {
-          response = await llm.continueConversation(
-            { messages, responseSchema: ANSWER_SCHEMA, tools },
-            signal,
-          );
-          break;
-        } catch (err) {
-          const retryable = err instanceof InvestigatorError && err.retryable;
-          attempt += 1;
-          if (!retryable || attempt > maxLlmRetries) throw err;
-        }
-      }
+      // --- Dynamic deliberation turn: the agent picks its own next move ---
+      const response = await callLlm(DELIBERATION_SCHEMA, true);
 
       await persistStep({
         input: { iteration: iterations },
@@ -172,10 +243,22 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
         status: "OK",
       });
 
+      const deliberation = (response.content ?? {}) as { done?: unknown };
       if (response.toolCalls.length === 0) {
-        answer = response.content;
-        await finishRun("COMPLETED", { answer, iterations, toolCallsExecuted });
-        return { status: "COMPLETED", answer, runId, iterations, toolCallsExecuted };
+        // The ONLY finish signal: no further tool needed AND done:true.
+        if (deliberation.done === true) {
+          answer = response.content;
+          await finishRun("COMPLETED", { answer, plan, iterations, toolCallsExecuted });
+          return { status: "COMPLETED", answer, plan, runId, iterations, toolCallsExecuted };
+        }
+        // Premature stop — nudge the agent to choose a tool or finish honestly.
+        messages.push({
+          role: "user",
+          content:
+            "You requested no tool but did not set done:true. Either call the next most " +
+            "informative tool, or set done:true with your final summary.",
+        });
+        continue;
       }
 
       // --- Execute each requested tool sequentially, feed results back ---
@@ -227,12 +310,12 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     }
 
     // Max iterations reached without a final answer.
-    await finishRun("COMPLETED", { answer: null, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
-    return { status: "MAX_ITERATIONS", answer: null, runId, iterations, toolCallsExecuted };
+    await finishRun("COMPLETED", { answer: null, plan, iterations, toolCallsExecuted, stopped: "MAX_ITERATIONS" });
+    return { status: "MAX_ITERATIONS", answer: null, plan, runId, iterations, toolCallsExecuted };
   } catch (err) {
     if (signal?.aborted || (err instanceof InvestigatorError && err.message === "Investigation cancelled")) {
-      await finishRun("CANCELLED", { iterations, toolCallsExecuted });
-      return { status: "CANCELLED", answer: null, runId, iterations, toolCallsExecuted };
+      await finishRun("CANCELLED", { plan, iterations, toolCallsExecuted });
+      return { status: "CANCELLED", answer: null, plan, runId, iterations, toolCallsExecuted };
     }
     await persistStep({
       reasoning: err instanceof Error ? err.message : String(err),
@@ -240,12 +323,14 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     }).catch(() => undefined);
     await finishRun("FAILED", {
       error: err instanceof Error ? err.message : String(err),
+      plan,
       iterations,
       toolCallsExecuted,
     });
     return {
       status: "FAILED",
       answer: null,
+      plan,
       runId,
       iterations,
       toolCallsExecuted,

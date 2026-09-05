@@ -4,307 +4,543 @@ import Link from "next/link";
 import { useState } from "react";
 
 export default function LandingPage() {
-  const [activeCategory, setActiveCategory] = useState("COGS AUDIT");
-
-  const categories = [
-    "COGS AUDIT",
-    "VENDOR ARBITRAGE",
-    "PO MATCHING",
-    "LEDGER DRIFT",
-    "ANOMALY DETECTION",
-  ];
+  const [activeTab, setActiveTab] = useState<"AUG_MARGIN" | "APEX_OVERCHARGE" | "PO_VARIANCE">("AUG_MARGIN");
 
   return (
     <div className="landing-root">
-      {/* Top Navigation */}
-      <header className="landing-nav">
-        <Link href="/" className="brand-title">
-          <span className="brand-badge">S</span>
-          CFO SENTINEL
-        </Link>
+      <div className="hairline-grid-y" aria-hidden="true" />
 
-        <nav className="nav-links">
-          <a href="#ledger">LEDGER</a>
-          <a href="#investigation">INVESTIGATION</a>
-          <a href="#evidence">EVIDENCE GRAPH</a>
-          <a href="#governance">GOVERNANCE</a>
-        </nav>
-
-        <div className="nav-actions">
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#6b7280" }}>
-            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
-            <span className="font-mono">LEDGER ENGINE V2.0 LIVE</span>
-          </div>
-          <Link href="/dashboard" className="btn-nav-outline font-mono">
-            ENTER DASHBOARD <span style={{ fontSize: "12px" }}>&rarr;</span>
+      {/* Top Architectural Header */}
+      <header className="sentinel-topbar">
+        <div className="sentinel-topbar-inner">
+          <Link href="/" className="brand-emblem-wrap">
+            <div className="brand-emblem">∑</div>
+            <div className="brand-wordmark">CFO SENTINEL</div>
           </Link>
+
+          <nav className="topbar-nav font-mono">
+            <a href="#forensics">INCIDENT FORENSICS</a>
+            <a href="#deterministic">DETERMINISTIC ENGINE</a>
+            <a href="#lineage">PROCURE-TO-PAY</a>
+            <a href="#specifications">SYSTEM SPECS</a>
+          </nav>
+
+          <div className="topbar-telemetry">
+            <div className="telemetry-chip font-mono">
+              <span className="beacon-dot" />
+              <span>POSTGRES GL // 0.0ms DRIFT</span>
+            </div>
+            <Link href="/dashboard" className="btn-console-enter font-mono">
+              LAUNCH CONSOLE <span style={{ fontSize: "12px" }}>&rarr;</span>
+            </Link>
+          </div>
         </div>
       </header>
 
       {/* Hero Section */}
-      <section className="hero-wrapper">
-        {/* Wireframe geometric backdrop like Attachment 1 */}
-        <div className="wireframe-poly-container" aria-hidden="true">
+      <section className="hero-stage">
+        {/* Intricate Architectural Geometry & Financial Coordinate Vectors */}
+        <div className="hero-vector-backdrop" aria-hidden="true">
           <svg
-            viewBox="0 0 600 600"
+            viewBox="0 0 800 800"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
             style={{ width: "100%", height: "100%" }}
           >
-            {/* Outer Decagon / Octagon */}
+            {/* Outer Concentric Nested Geometric Circles & Hairlines */}
+            <circle cx="400" cy="400" r="380" stroke="#e2e8f0" strokeWidth="1" strokeDasharray="4 6" />
+            <circle cx="400" cy="400" r="280" stroke="#cbd5e1" strokeWidth="1" />
+            <circle cx="400" cy="400" r="160" stroke="#94a3b8" strokeWidth="1.2" strokeDasharray="2 4" />
+            <circle cx="400" cy="400" r="8" stroke="#000" strokeWidth="2" fill="#fff" />
+
+            {/* Precision Wireframe Polygons (Octagon + Nested Polyhedra) */}
             <polygon
-              points="300,30 490,90 570,280 500,470 320,570 130,520 40,350 80,150"
+              points="400,60 640,160 740,400 640,640 400,740 160,640 60,400 160,160"
               stroke="#cbd5e1"
               strokeWidth="1.2"
             />
-            {/* Inner rotated polygon */}
             <polygon
-              points="300,75 510,210 440,490 170,510 90,260"
+              points="400,120 600,200 680,400 600,600 400,680 200,600 120,400 200,200"
               stroke="#94a3b8"
               strokeWidth="1.4"
             />
-            {/* Geometric star polygons */}
             <polygon
-              points="140,110 460,110 540,360 300,550 60,360"
-              stroke="#e2e8f0"
-              strokeWidth="1.2"
-              strokeDasharray="4 4"
-            />
-            <polygon
-              points="300,50 550,450 50,450"
+              points="200,200 600,200 400,680"
               stroke="#cbd5e1"
-              strokeWidth="1.2"
+              strokeWidth="1"
               strokeDasharray="6 6"
             />
             <polygon
-              points="300,550 50,150 550,150"
+              points="200,600 600,600 400,120"
               stroke="#cbd5e1"
-              strokeWidth="1.2"
+              strokeWidth="1"
               strokeDasharray="6 6"
             />
-            {/* Fine coordinate diagonals */}
-            <line x1="300" y1="30" x2="300" y2="570" stroke="#f1f5f9" strokeWidth="1.5" />
-            <line x1="40" y1="350" x2="570" y2="280" stroke="#f1f5f9" strokeWidth="1.5" />
-            <circle cx="300" cy="300" r="180" stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2 3" />
-            <circle cx="300" cy="300" r="4" fill="#000" />
-            <circle cx="210" cy="210" r="3" fill="#64748b" />
-            <circle cx="390" cy="210" r="3" fill="#64748b" />
-            <circle cx="390" cy="390" r="3" fill="#64748b" />
-            <circle cx="210" cy="390" r="3" fill="#64748b" />
+
+            {/* Mathematical Axis Lines & Crosshair Markers */}
+            <line x1="400" y1="20" x2="400" y2="780" stroke="#e2e8f0" strokeWidth="1" />
+            <line x1="20" y1="400" x2="780" y2="400" stroke="#e2e8f0" strokeWidth="1" />
+            <line x1="130" y1="130" x2="670" y2="670" stroke="#f1f5f9" strokeWidth="1.5" strokeDasharray="3 3" />
+            <line x1="130" y1="670" x2="670" y2="130" stroke="#f1f5f9" strokeWidth="1.5" strokeDasharray="3 3" />
+
+            {/* Forensic Nodes & Registration Ticks */}
+            <circle cx="640" cy="160" r="4" fill="#059669" />
+            <circle cx="160" cy="640" r="4" fill="#e11d48" />
+            <circle cx="640" cy="640" r="4" fill="#000" />
+            <circle cx="160" cy="160" r="4" fill="#000" />
+            <circle cx="400" cy="120" r="3" fill="#64748b" />
+            <circle cx="400" cy="680" r="3" fill="#64748b" />
+            <circle cx="120" cy="400" r="3" fill="#64748b" />
+            <circle cx="680" cy="400" r="3" fill="#64748b" />
           </svg>
         </div>
 
-        <div className="hero-content">
-          <div className="status-tag">
-            <span className="status-dot" />
-            <span>FINANCIAL REASONING ENGINE V2.0 LIVE</span>
-          </div>
-
-          <h1 className="hero-headline">
-            INVESTIGATE
-            <span className="hero-headline-italic">variances</span>
-          </h1>
-
-          <p className="hero-subtitle">
-            // Autonomous financial incident investigation and root-cause verification with zero hallucination.
-          </p>
-
-          <div className="hero-actions">
-            <Link href="/incidents" className="btn-dark">
-              INITIALISE CONTEXT <span style={{ fontSize: "12px" }}>&#8599;</span>
-            </Link>
-            <Link href="/dashboard" className="btn-light">
-              VIEW SPECS <span style={{ fontSize: "11px" }}>&#9638;</span>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* 3 Pillars Feature Triad (bottom of Attachment 1) */}
-      <section className="feature-tri-grid">
-        <div className="feature-col">
-          <div className="feature-icon-box">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-            </svg>
-          </div>
-          <div className="feature-col-title">INSTANT RECONCILIATION</div>
-          <div className="feature-col-desc">
-            Watch general ledger drifts resolve instantly as postings hit. No waiting — pure deterministic mathematical proof.
-          </div>
+        <div className="hero-meta-badge font-mono">
+          <span className="beacon-dot" />
+          <span>AUTONOMOUS FINANCIAL FORENSICS ENGINE V2.0</span>
         </div>
 
-        <div className="feature-col">
-          <div className="feature-icon-box">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-            </svg>
-          </div>
-          <div className="feature-col-title">SEAMLESS AUDIT TRAIL</div>
-          <div className="feature-col-desc">
-            Our agentic pipeline intelligently links invoices, POs, and contract lines to guarantee every calculation traces back to truth.
-          </div>
-        </div>
+        <h1 className="hero-main-title">
+          THE LEDGER NEVER LIES.
+          <span className="hero-serif-accent">neither do our agents.</span>
+        </h1>
 
-        <div className="feature-col">
-          <div className="feature-icon-box">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="4" y="4" width="16" height="16" rx="2" />
-              <rect x="9" y="9" width="6" height="6" />
-              <line x1="9" y1="1" x2="9" y2="4" />
-              <line x1="15" y1="1" x2="15" y2="4" />
-              <line x1="9" y1="20" x2="9" y2="23" />
-              <line x1="15" y1="20" x2="15" y2="23" />
-              <line x1="20" y1="9" x2="23" y2="9" />
-              <line x1="20" y1="14" x2="23" y2="14" />
-              <line x1="1" y1="9" x2="4" y2="9" />
-              <line x1="1" y1="14" x2="4" y2="14" />
-            </svg>
-          </div>
-          <div className="feature-col-title">ANY ERP, ANY SYSTEM</div>
-          <div className="feature-col-desc">
-            Connect standard double-entry records from NetSuite, SAP, or PostgreSQL. Deterministic calculations over authoritative data.
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works Section (Attachment 2 style) */}
-      <section className="workflow-section" id="investigation">
-        <div className="section-tag">HOW IT WORKS</div>
-
-        <div className="workflow-header">
-          <h2 className="section-title">
-            BRINGING NUMBERS <span>to truth</span>
-          </h2>
-
-          <div className="tag-pills">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`tag-pill ${activeCategory === cat ? "active" : ""}`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <p className="section-desc-mono">
-          A seamless journey from raw ERP general ledger transactions to fully verified root-cause analysis, tailored exactly to CFO standards.
+        <p className="hero-lead-text font-mono">
+          // CFO Sentinel deploys deterministic AI investigators across your general ledger, purchase orders, and supplier contracts. Uncovering margin degradation, invoice overcharges, and ledger drift before month-end close.
         </p>
 
-        {/* 3 Step Cards */}
-        <div className="step-cards-row">
-          {/* Step 01 */}
-          <div className="step-card">
-            <div>
-              <div className="step-card-header">
-                <span className="step-card-num">01</span>
-                <div className="step-icon-btn">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
-                </div>
-              </div>
-              <span className="step-badge">INGEST</span>
-              <div className="step-card-title">STREAM GENERAL LEDGER</div>
-              <p className="step-card-body">
-                Connect double-entry journals, PO commitments, and vendor invoices. Every debited line reconciles against balanced credits in real-time.
-              </p>
-            </div>
-            <div style={{ marginTop: "16px", borderTop: "1px dashed #e5e7eb", paddingTop: "12px", fontSize: "10px", color: "#9ca3af" }} className="font-mono">
-              STATUS: POSTINGS BALANCED [DEBITS == CREDITS]
-            </div>
-          </div>
-
-          {/* Step 02 */}
-          <div className="step-card">
-            <div>
-              <div className="step-card-header">
-                <span className="step-card-num">02</span>
-                <div className="step-icon-btn">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="12" />
-                    <line x1="12" y1="16" x2="12.01" y2="16" />
-                  </svg>
-                </div>
-              </div>
-              <span className="step-badge">ISOLATE</span>
-              <div className="step-card-title">DISCOVER VARIANCE</div>
-              <p className="step-card-body">
-                Autonomous agents detect margin degradation, price variances, and unexpected spikes across multi-period P&amp;L baselines.
-              </p>
-            </div>
-            <div style={{ marginTop: "16px", borderTop: "1px dashed #e5e7eb", paddingTop: "12px", fontSize: "10px", color: "#9ca3af" }} className="font-mono">
-              TARGET: AUG MARGIN FALL (-4.82pp DETECTED)
-            </div>
-          </div>
-
-          {/* Step 03 */}
-          <div className="step-card">
-            <div>
-              <div className="step-card-header">
-                <span className="step-card-num">03</span>
-                <div className="step-icon-btn">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </div>
-              </div>
-              <span className="step-badge">RESOLVE</span>
-              <div className="step-card-title">PROVE &amp; APPROVE</div>
-              <p className="step-card-body">
-                Traced evidence links the exact offending vendor invoice against negotiated contract unit prices with human-in-the-loop approvals.
-              </p>
-            </div>
-            <div style={{ marginTop: "16px", borderTop: "1px dashed #e5e7eb", paddingTop: "12px", fontSize: "10px", color: "#9ca3af" }} className="font-mono">
-              RESULT: APEX STEEL OVERCHARGE CONFIRMED
-            </div>
-          </div>
+        <div className="hero-cta-group">
+          <Link href="/incidents" className="btn-primary-hero font-mono">
+            INVESTIGATE INCIDENTS <span style={{ fontSize: "12px" }}>&#8599;</span>
+          </Link>
+          <Link href="/dashboard" className="btn-secondary-hero font-mono">
+            EXPLORE P&amp;L DASHBOARD <span style={{ fontSize: "11px" }}>&#9638;</span>
+          </Link>
         </div>
 
-        {/* Live Architecture Terminal Simulation */}
-        <div className="terminal-block" id="ledger">
-          <div className="terminal-bar">
-            <div className="terminal-dots">
-              <div className="terminal-dot-single" />
-              <div className="terminal-dot-single" />
-              <div className="terminal-dot-single" />
+        {/* Live Seeded Telemetry Strip */}
+        <div className="telemetry-strip font-mono">
+          <div className="telemetry-cell">
+            <div className="telemetry-label">
+              <span>AUDITED REVENUE (2024)</span>
+              <span>USD</span>
             </div>
-            <span>DETERMINISTIC_EXECUTION_TRACE :: ACME_INDUSTRIES_2024</span>
-            <span>VERIFIED_SQL_TX</span>
+            <div className="telemetry-value">$14,730,000</div>
+            <div className="telemetry-sub" style={{ color: "#059669" }}>
+              +0.42% MoM Base Index
+            </div>
           </div>
-          <div className="terminal-content">
-            <div style={{ color: "#10b981", marginBottom: "8px" }}>
-              // RULE 1: LLM NEVER COMPUTES AUTHORITATIVE FINANCIAL NUMBERS.
+
+          <div className="telemetry-cell">
+            <div className="telemetry-label">
+              <span>AUGUST GROSS MARGIN</span>
+              <span>ACME</span>
             </div>
-            <div>[08:14:02] AGENT_LOOP: Triggering hypothesis evaluation for incident #INC-2024-08</div>
-            <div>[08:14:03] TOOL_CALL: comparePeriods(periodA: "2024-07", periodB: "2024-08", metric: "GROSS_MARGIN")</div>
-            <div>[08:14:03] RETURN: grossMarginVariance = -4.82pp (Revenue: $1,420,000 | COGS: $980,000)</div>
-            <div>[08:14:04] TOOL_CALL: compareVendorPrices(vendorId: "vnd_apex_steel", period: "2024-08")</div>
-            <div>[08:14:05] RETURN: Billed unit price: $148.50/ton vs Contract master: $116.00/ton (+28.01% deviation)</div>
-            <div style={{ color: "#b45309", marginTop: "8px" }}>
-              [08:14:06] EVIDENCE_STORED: id=ev_0892a7 &rarr; Billed delta = $48,750.00 &rarr; Confidence: 0.99
+            <div className="telemetry-value" style={{ color: "#e11d48" }}>
+              27.58%
+            </div>
+            <div className="telemetry-sub" style={{ color: "#e11d48" }}>
+              -4.82pp vs July (32.40%)
+            </div>
+          </div>
+
+          <div className="telemetry-cell">
+            <div className="telemetry-label">
+              <span>LEDGER INVARIANT</span>
+              <span>POSTGRES</span>
+            </div>
+            <div className="telemetry-value">100.00%</div>
+            <div className="telemetry-sub" style={{ color: "#059669" }}>
+              Balanced: Debits == Credits
+            </div>
+          </div>
+
+          <div className="telemetry-cell">
+            <div className="telemetry-label">
+              <span>IDENTIFIED LEAKAGE</span>
+              <span>AUDIT</span>
+            </div>
+            <div className="telemetry-value" style={{ color: "#d97706" }}>
+              $48,750
+            </div>
+            <div className="telemetry-sub">
+              Apex Steel Unit Price Delta
             </div>
           </div>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="landing-footer">
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span className="brand-badge">S</span>
-          <span style={{ fontWeight: "700", color: "#000", letterSpacing: "0.1em" }}>CFO SENTINEL</span>
-          <span style={{ marginLeft: "10px" }}>Deterministic Financial Investigation Infrastructure</span>
+      {/* The Iron Rule Callout */}
+      <section className="iron-rule-section" id="deterministic">
+        <div className="iron-rule-box">
+          <div className="iron-rule-tag font-mono">THE DETERMINISTIC INVARIANT</div>
+          <h2 className="iron-rule-quote">
+            &ldquo;The LLM never calculates authoritative numbers. <span>The agent hypothesizes; only deterministic services compute truth.&rdquo;</span>
+          </h2>
+          <p className="iron-rule-desc">
+            Unlike probabilistic copilot tools that hallucinate mathematical calculations, CFO Sentinel enforces an unbreachable architecture: Agent reasoning triggers Zod-validated financial tools, which execute pure TypeScript arithmetic against authoritative PostgreSQL double-entry journal transactions.
+          </p>
+
+          <div className="flow-step-chain font-mono">
+            <div className="flow-node">AGENT REASONING</div>
+            <div style={{ color: "#64748b" }}>&rarr;</div>
+            <div className="flow-node highlight">ZOD SCHEMA VALIDATION</div>
+            <div style={{ color: "#64748b" }}>&rarr;</div>
+            <div className="flow-node">DETERMINISTIC P&amp;L SERVICE</div>
+            <div style={{ color: "#64748b" }}>&rarr;</div>
+            <div className="flow-node highlight">POSTGRESQL AUDIT LOG</div>
+            <div style={{ color: "#64748b" }}>&rarr;</div>
+            <div className="flow-node">CRYPTOGRAPHIC EVIDENCE</div>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: "24px" }} className="font-mono">
-          <Link href="/dashboard" style={{ textDecoration: "underline" }}>LAUNCH APP</Link>
-          <Link href="/incidents" style={{ textDecoration: "underline" }}>ACTIVE INCIDENTS</Link>
-          <a href="https://github.com" target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>GITHUB</a>
+      </section>
+
+      {/* Forensic Incident Lab (Interactive Case Study) */}
+      <section className="lab-section" id="forensics">
+        <div className="section-eyebrow">CASE STUDY // REAL INVESTIGATION RUNTIME</div>
+
+        <div className="lab-title-row">
+          <h2 className="lab-heading">
+            ANATOMY OF AN <span>incident traversal</span>
+          </h2>
+
+          <div className="lab-tabs font-mono">
+            <button
+              onClick={() => setActiveTab("AUG_MARGIN")}
+              className={`lab-tab-btn ${activeTab === "AUG_MARGIN" ? "active" : ""}`}
+            >
+              [1] MARGIN COLLAPSE
+            </button>
+            <button
+              onClick={() => setActiveTab("APEX_OVERCHARGE")}
+              className={`lab-tab-btn ${activeTab === "APEX_OVERCHARGE" ? "active" : ""}`}
+            >
+              [2] APEX STEEL SURCHARGE
+            </button>
+            <button
+              onClick={() => setActiveTab("PO_VARIANCE")}
+              className={`lab-tab-btn ${activeTab === "PO_VARIANCE" ? "active" : ""}`}
+            >
+              [3] CONTRACT RECONCILIATION
+            </button>
+          </div>
+        </div>
+
+        {/* Live Forensics Console */}
+        <div className="forensics-console font-mono">
+          <div className="console-header-bar">
+            <div className="console-header-left">
+              <div className="window-pills">
+                <div className="window-pill" />
+                <div className="window-pill" />
+                <div className="window-pill" />
+              </div>
+              <span>INCIDENT #INC-2024-08-01 // DETECTED VIA SCHEDULED GL DRIFT SWEEP</span>
+            </div>
+            <span>RUN_ID: run_9281fca · CONFIDENCE: 0.99</span>
+          </div>
+
+          <div className="console-grid-layout">
+            {/* Left summary pane */}
+            <div className="console-left-pane">
+              <div className="incident-card-preview">
+                <div className="incident-badge-row">
+                  <span className="badge-tag critical">CRITICAL SEVERITY</span>
+                  <span className="badge-tag investigating">RESOLVED PROOF</span>
+                </div>
+                <div style={{ fontSize: "13px", fontWeight: "800", color: "#000", marginBottom: "8px" }}>
+                  August 2024 Gross Margin Degradation
+                </div>
+                <div style={{ fontSize: "11px", color: "#64748b", lineHeight: "1.6" }}>
+                  Gross profit fell by 4.82 percentage points month-over-month despite stable top-line sales volume of $1,235,000.
+                </div>
+              </div>
+
+              <div style={{ fontSize: "11px", color: "#334155", marginTop: "20px" }}>
+                <div style={{ fontWeight: "700", marginBottom: "8px", textTransform: "uppercase" }}>Key Findings</div>
+                <div style={{ padding: "8px 0", borderTop: "1px solid #e2e8f0" }}>
+                  &bull; COGS increased +$78,400 in August
+                </div>
+                <div style={{ padding: "8px 0", borderTop: "1px solid #e2e8f0" }}>
+                  &bull; Raw Materials (Acct 5000) drove 92% of surge
+                </div>
+                <div style={{ padding: "8px 0", borderTop: "1px solid #e2e8f0", color: "#e11d48", fontWeight: "600" }}>
+                  &bull; Apex Steel invoiced +28.0% over contract unit price ($1,088 vs $850/ton)
+                </div>
+              </div>
+            </div>
+
+            {/* Right Forensic Traversal Log */}
+            <div className="console-right-pane">
+              {activeTab === "AUG_MARGIN" && (
+                <div>
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot" />
+                    <div className="step-tool-call">STEP 1: getPnl({`{ year: 2024, month: 8 }`})</div>
+                    <div className="step-tool-desc">
+                      Agent extracts deterministic P&amp;L statement from balanced posted transactions.
+                    </div>
+                    <div className="step-evidence-snippet">
+                      Revenue: $1,235,000 | COGS: $894,390 | Gross Profit: $340,610 | Margin: 27.58%
+                    </div>
+                  </div>
+
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot" />
+                    <div className="step-tool-call">STEP 2: comparePeriods(periodA: 7, periodB: 8, year: 2024)</div>
+                    <div className="step-tool-desc">
+                      Agent executes variance analysis against prior clean baseline period.
+                    </div>
+                    <div className="step-evidence-snippet">
+                      July Margin: 32.40% &rarr; August: 27.58% (Delta: -4.82pp / COGS Variance: +$78,400)
+                    </div>
+                  </div>
+
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot success" />
+                    <div className="step-tool-call">STEP 3: breakDownMetric(metric: "COGS", month: 8)</div>
+                    <div className="step-tool-desc">
+                      Deterministic breakdown of general ledger cost accounts.
+                    </div>
+                    <div className="step-evidence-snippet" style={{ borderLeftColor: "#059669" }}>
+                      Account 5000 (Materials): $836,790 (+12.4% MoM) | Account 5010 (Freight): $57,600 (0.0% MoM)
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "APEX_OVERCHARGE" && (
+                <div>
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot" />
+                    <div className="step-tool-call">STEP 4: getVendorSpend(month: 8, year: 2024)</div>
+                    <div className="step-tool-desc">
+                      Aggregates total disbursements and AP ledger lines by vendor.
+                    </div>
+                    <div className="step-evidence-snippet">
+                      Apex Steel: $359,040 (42.9% of materials spend) | GLC: $150,000 | Pacific Plastics: $128,000
+                    </div>
+                  </div>
+
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot success" />
+                    <div className="step-tool-call">STEP 5: compareVendorPrices(vendorCode: "APEX", month: 8)</div>
+                    <div className="step-tool-desc">
+                      Cross-references invoiced unit price with signed Master Supply Contract.
+                    </div>
+                    <div className="step-evidence-snippet" style={{ borderLeftColor: "#e11d48", color: "#9f1239" }}>
+                      Contract Price: $850.00/TON | August Invoiced Price: $1,088.00/TON | Deviation: +28.00%
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "PO_VARIANCE" && (
+                <div>
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot" />
+                    <div className="step-tool-call">STEP 6: calculateFinancialImpact(vendorCode: "APEX", delta: 238, qty: 330)</div>
+                    <div className="step-tool-desc">
+                      Mathematical quantification of total unauthorized billing surcharge.
+                    </div>
+                    <div className="step-evidence-snippet" style={{ borderLeftColor: "#059669" }}>
+                      Billed: $359,040 | Contracted Baseline: $280,500 | Overcharge Total: $78,540.00
+                    </div>
+                  </div>
+
+                  <div className="traversal-step">
+                    <div className="traversal-node-dot success" />
+                    <div className="step-tool-call">STEP 7: recordEvidence() &rarr; PROPOSE ACTION</div>
+                    <div className="step-tool-desc">
+                      Causal link established. Proposed credit memo created awaiting Human Controller sign-off.
+                    </div>
+                    <div className="step-evidence-snippet" style={{ borderLeftColor: "#d97706" }}>
+                      Action: HOLD_AP_PAYMENT_APEX &amp; ISSUE_CREDIT_MEMO_REQUEST ($78,540) &rarr; Status: PENDING_APPROVAL
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Procure-to-Pay Lineage Chain Map */}
+      <section className="lab-section" id="lineage">
+        <div className="section-eyebrow">DATA LINEAGE // CAUSAL GRAPH</div>
+        <h2 className="lab-heading">
+          END-TO-END <span>procure-to-pay traceability</span>
+        </h2>
+        <p style={{ color: "#64748b", fontSize: "14px", margin: "16px 0 28px", maxWidth: "680px" }}>
+          Every finding generated by CFO Sentinel traces unbroken from the general ledger line back to the supplier contract clause.
+        </p>
+
+        <div className="chain-map-container font-mono">
+          <div className="chain-steps-flex">
+            <div className="chain-box">
+              <div className="chain-step-num">01 / ENTITY</div>
+              <div className="chain-step-name">VENDOR MASTER</div>
+              <div className="chain-step-detail">Apex Steel Co (APEX) · Tier 1 Raw Materials</div>
+            </div>
+
+            <div className="chain-connector">&rarr;</div>
+
+            <div className="chain-box">
+              <div className="chain-step-num">02 / MASTER AGREEMENT</div>
+              <div className="chain-step-name">CONTRACT CTR-01</div>
+              <div className="chain-step-detail">Unit Price: $850/TON · Term: 2024-2026</div>
+            </div>
+
+            <div className="chain-connector">&rarr;</div>
+
+            <div className="chain-box">
+              <div className="chain-step-num">03 / COMMITMENT</div>
+              <div className="chain-step-name">PURCHASE ORDER</div>
+              <div className="chain-step-detail">PO-2024-08-330 · Qty: 330 TON Steel Coil</div>
+            </div>
+
+            <div className="chain-connector">&rarr;</div>
+
+            <div className="chain-box flagged">
+              <div className="chain-step-num" style={{ color: "#e11d48" }}>04 / ANOMALY POINT</div>
+              <div className="chain-step-name" style={{ color: "#e11d48" }}>INVOICE INV-8821</div>
+              <div className="chain-step-detail">Billed: $1,088/TON (+28% Unapproved Surcharge)</div>
+            </div>
+
+            <div className="chain-connector">&rarr;</div>
+
+            <div className="chain-box">
+              <div className="chain-step-num">05 / LEDGER EFFECT</div>
+              <div className="chain-step-name">JOURNAL ENTRY</div>
+              <div className="chain-step-detail">Dr 5000 (COGS) $359,040 / Cr 2000 (AP) $359,040</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Core Architectural Pillars */}
+      <section className="pillars-section">
+        <div className="section-eyebrow">FOUNDATION // THREE CORE PILLARS</div>
+        <h2 className="lab-heading">
+          ENGINEERED FOR <span>audit grade integrity</span>
+        </h2>
+
+        <div className="pillars-grid">
+          <div className="pillar-card">
+            <div>
+              <div className="pillar-index font-mono">01 // DETERMINISTIC RECONCILIATION</div>
+              <h3 className="pillar-title">ZERO-HALLUCINATION ARITHMETIC</h3>
+              <p className="pillar-body">
+                Mathematical operations are isolated strictly into deterministic TypeScript services. Debits and credits are balanced before state mutations occur, eliminating financial drift and model confabulation.
+              </p>
+            </div>
+            <div className="pillar-footer-meta font-mono">
+              INVARIANT: SUM(DEBITS) === SUM(CREDITS)
+            </div>
+          </div>
+
+          <div className="pillar-card">
+            <div>
+              <div className="pillar-index font-mono">02 // CAUSAL EVIDENCE GRAPH</div>
+              <h3 className="pillar-title">FULL FORENSIC ATTRIBUTION</h3>
+              <p className="pillar-body">
+                Every agent conclusion links directly to immutable database records. An audit log captures tool execution inputs, raw SQL outputs, and confidence intervals to withstand external auditor scrutiny.
+              </p>
+            </div>
+            <div className="pillar-footer-meta font-mono">
+              SPEC: RECORD_EVIDENCE() IMMUTABLE TRACE
+            </div>
+          </div>
+
+          <div className="pillar-card">
+            <div>
+              <div className="pillar-index font-mono">03 // DUAL-KEY GOVERNANCE</div>
+              <h3 className="pillar-title">HUMAN CONTROLLER SIGN-OFF</h3>
+              <p className="pillar-body">
+                The agent proposes; the finance team commands. Remediation actions such as vendor credit claims, AP payment freezes, or journal adjustments require cryptographic human approval.
+              </p>
+            </div>
+            <div className="pillar-footer-meta font-mono">
+              POLICY: DUAL-KEY SOX COMPLIANT APPROVALS
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Technical Spec Sheet Table */}
+      <section className="spec-sheet-section" id="specifications">
+        <div className="section-eyebrow">SPECIFICATIONS // SYSTEM ARCHITECTURE</div>
+        <h2 className="lab-heading">
+          PLATFORM <span>specifications</span>
+        </h2>
+
+        <div className="spec-table-box font-mono" style={{ marginTop: "28px" }}>
+          <div className="spec-row">
+            <div className="spec-col-label">PRIMARY LEDGER ENGINE</div>
+            <div className="spec-col-desc">PostgreSQL 16 relational double-entry ledger with strict transactional consistency and balance integrity checks.</div>
+            <div className="spec-col-metric">ACID COMPLIANT</div>
+          </div>
+          <div className="spec-row">
+            <div className="spec-col-label">TOOL EXECUTION SURFACE</div>
+            <div className="spec-col-desc">8 isolated deterministic tools (getPnl, comparePeriods, breakDownMetric, getVendorSpend, compareVendorPrices).</div>
+            <div className="spec-col-metric">ZOD SCHEMA VALIDATED</div>
+          </div>
+          <div className="spec-row">
+            <div className="spec-col-label">MULTI-TENANT ISOLATION</div>
+            <div className="spec-col-desc">All database transactions and evidence records enforce strict tenant separation via orgId foreign keys.</div>
+            <div className="spec-col-metric">ROW-LEVEL PARTITIONED</div>
+          </div>
+          <div className="spec-row">
+            <div className="spec-col-label">LLM INTEGRATION BOUNDARY</div>
+            <div className="spec-col-desc">Model is restricted exclusively to hypothesis generation and tool selection. Never computes authoritative figures.</div>
+            <div className="spec-col-metric">READ-ONLY REASONING</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Terminal CTA Banner */}
+      <section className="landing-cta-banner">
+        <div className="cta-inner-card">
+          <div style={{ fontSize: "10px", letterSpacing: "0.25em", color: "#10b981", marginBottom: "16px" }} className="font-mono">
+            READY TO AUDIT YOUR GENERAL LEDGER?
+          </div>
+          <h2 className="cta-title">
+            RESTORE CERTAINTY TO <span>your financial statements.</span>
+          </h2>
+          <p className="cta-desc font-mono">
+            Launch the CFO Sentinel console to inspect live margin anomalies across the Acme Industries 12-month general ledger dataset.
+          </p>
+          <div style={{ display: "flex", gap: "16px", justifyContent: "center" }}>
+            <Link href="/dashboard" className="btn-primary-hero font-mono" style={{ background: "#fff", color: "#000", border: "1px solid #fff" }}>
+              ACCESS CONSOLE NOW &rarr;
+            </Link>
+            <Link href="/incidents" className="btn-secondary-hero font-mono" style={{ background: "transparent", color: "#fff", borderColor: "#374151" }}>
+              VIEW AUGUST INCIDENT
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Technical Footer */}
+      <footer className="sentinel-footer font-mono">
+        <div className="footer-inner">
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div className="brand-emblem" style={{ width: "22px", height: "22px", fontSize: "11px" }}>∑</div>
+            <span style={{ fontWeight: "800", color: "#000" }}>CFO SENTINEL</span>
+            <span style={{ color: "#94a3b8" }}>·</span>
+            <span>Deterministic Financial Forensics Platform</span>
+          </div>
+
+          <div className="footer-links">
+            <Link href="/dashboard">CONSOLE</Link>
+            <Link href="/incidents">INCIDENTS</Link>
+            <Link href="/approvals">APPROVALS</Link>
+            <a href="https://github.com/shashwat558/CFO-Senitel" target="_blank" rel="noreferrer">SOURCE REPO</a>
+          </div>
+
+          <div style={{ color: "#94a3b8" }}>
+            POSTGRESQL 16 · NEXT.JS 14 · REACT 18
+          </div>
         </div>
       </footer>
     </div>

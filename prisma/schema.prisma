@@ -164,6 +164,7 @@ model Organization {
   budgets        Budget[]
   forecasts      Forecast[]
   syncRuns       SyncRun[]
+  stagedRecords  StagedRecord[]
   incidents      FinancialIncident[]
   agentRuns      AgentRun[]
   approvals      Approval[]
@@ -695,4 +696,42 @@ model SyncRun {
 
   @@index([orgId])
   @@index([orgId, provider])
+}
+
+// ---------------------------------------------------------------- connector staging
+// Raw provider rows land here first (C2), promotion into the books happens in
+// C3. Re-pulling the same external id is a no-op via the unique key, so syncs
+// are idempotent. The agent never reads this table — only promoted rows.
+
+enum StagedRecordStatus {
+  STAGED
+  PROMOTED
+  REJECTED
+}
+
+model StagedRecord {
+  id                 String             @id @default(cuid())
+  orgId              String
+  provider           String             @default("dodo")
+  kind               String             // payment | payout | refund | subscription
+  externalId         String
+  occurredAt         DateTime
+  currency           String             @default("USD")
+  amount             Decimal            @db.Decimal(14, 2)
+  customerExternalId String?
+  customerEmail      String?
+  customerName       String?
+  status             StagedRecordStatus @default(STAGED)
+  raw                Json               @default("{}")
+  promotedId         String?
+  rejectReason       String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, provider, kind, externalId])
+  @@index([orgId])
+  @@index([orgId, provider, status])
+  @@index([orgId, provider, occurredAt])
 }

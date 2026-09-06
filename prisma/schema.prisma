@@ -50,6 +50,16 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum BankTransactionSource {
+  MANUAL
+  CSV_IMPORT
+}
+
+enum BankReconciliationStatus {
+  PENDING
+  RECONCILED
+}
+
 enum InvoiceType {
   AP // vendor bill (cost)
   AR // customer invoice (revenue)
@@ -149,6 +159,10 @@ model Organization {
   invoices       Invoice[]
   journalEntries JournalEntry[]
   transactions   Transaction[]
+  bankAccounts   BankAccount[]
+  bankTransactions BankTransaction[]
+  budgets        Budget[]
+  forecasts      Forecast[]
   incidents      FinancialIncident[]
   agentRuns      AgentRun[]
   approvals      Approval[]
@@ -226,10 +240,99 @@ model Account {
 
   org          Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   transactions Transaction[]
+  budgets      Budget[]
 
   @@unique([orgId, code])
   @@index([orgId])
   @@index([orgId, type])
+}
+
+// ---------------------------------------------------------------- cash, budgets, forecasts
+// Bank legs mirror settled invoices (see lib/seed/builder.ts): every PAID
+// invoice settles through exactly one BankTransaction, so collections and
+// payments reconcile 1:1. Connector imports (CSV first, §B4) land here with
+// source=CSV_IMPORT + externalId for dedupe — never straight into the GL.
+
+model BankAccount {
+  id             String   @id @default(cuid())
+  orgId          String
+  name           String
+  currency       String   @default("USD")
+  openingBalance Decimal  @db.Decimal(14, 2) @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  org          Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  transactions BankTransaction[]
+
+  @@unique([orgId, name])
+  @@index([orgId])
+}
+
+model BankTransaction {
+  id              String                   @id @default(cuid())
+  orgId           String
+  bankAccountId   String
+  date            DateTime
+  description     String                   @default("")
+  // Signed: +inflow (collections) / −outflow (payments, payroll, opex).
+  amount          Decimal                  @db.Decimal(14, 2)
+  externalId      String?
+  source          BankTransactionSource    @default(MANUAL)
+  status          BankReconciliationStatus @default(PENDING)
+  invoiceId       String?
+  glTransactionId String?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  org           Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  bankAccount   BankAccount   @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  invoice       Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  glTransaction Transaction?  @relation("GlLink", fields: [glTransactionId], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, bankAccountId, externalId])
+  @@index([orgId])
+  @@index([bankAccountId])
+  @@index([orgId, date])
+  @@index([glTransactionId])
+  @@index([orgId, status])
+}
+
+model Budget {
+  id        String   @id @default(cuid())
+  orgId     String
+  accountId String
+  year      Int
+  month     Int
+  amount    Decimal  @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org     Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  account Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([orgId, accountId, year, month])
+  @@index([orgId])
+  @@index([accountId])
+}
+
+model Forecast {
+  id        String   @id @default(cuid())
+  orgId     String
+  // Metric key: REVENUE | COGS | OPEX (BASE scenario seeded; others on demand).
+  metric    String
+  year      Int
+  month     Int
+  amount    Decimal  @db.Decimal(14, 2)
+  scenario  String   @default("BASE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, metric, year, month, scenario])
+  @@index([orgId])
 }
 
 // ---------------------------------------------------------------- procure-to-pay chain
@@ -323,6 +426,7 @@ model Invoice {
   contract      Contract?      @relation(fields: [contractId], references: [id], onDelete: SetNull)
   purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
   transactions  Transaction[]
+  bankTransactions BankTransaction[]
 
   @@unique([orgId, invoiceNumber])
   @@index([orgId])
@@ -374,6 +478,7 @@ model Transaction {
   vendor       Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
   invoice      Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  bankTransactions BankTransaction[] @relation("GlLink")
 
   @@index([orgId])
   @@index([journalEntryId])

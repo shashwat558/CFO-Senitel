@@ -16,6 +16,9 @@ import {
   MONTHLY_OPEX,
   MONTHLY_REVENUE_BASE,
   MONTHLY_REVENUE_GROWTH,
+  BANK_ACCOUNTS,
+  PAYROLL_FUNDING_DAY,
+  FORECAST_METRICS,
 } from "./constants";
 
 export interface SeedDataset {
@@ -29,6 +32,10 @@ export interface SeedDataset {
   invoices: InvoiceRow[];
   journalEntries: JournalEntryRow[];
   transactions: TransactionRow[];
+  bankAccounts: BankAccountRow[];
+  bankTransactions: BankTransactionRow[];
+  budgets: BudgetRow[];
+  forecasts: ForecastRow[];
   incident: IncidentRow;
 }
 
@@ -63,6 +70,24 @@ export interface TransactionRow {
   description: string;
 }
 
+export interface BankAccountRow {
+  id: string; code: string; name: string; currency: string; openingBalance: number;
+}
+
+export interface BankTransactionRow {
+  id: string; bankCode: string; date: Date; description: string;
+  amount: number; externalId: string; source: string; status: string;
+  invoiceNumber: string | null; glTransactionId: string | null;
+}
+
+export interface BudgetRow {
+  id: string; accountCode: string; year: number; month: number; amount: number;
+}
+
+export interface ForecastRow {
+  id: string; metric: string; year: number; month: number; amount: number; scenario: string;
+}
+
 export interface IncidentRow {
   id: string; title: string; description: string; type: string;
   status: string; severity: string; periodStart: Date; periodEnd: Date;
@@ -83,6 +108,7 @@ export function buildDataset(seed = SEED): SeedDataset {
 
   const contracts: ContractRow[] = VENDORS.map((v) => {
     const annualQty = money(v.baseQtyPerMonth * 12);
+
     return {
       id: `contract_${v.code.toLowerCase()}`,
       vendorCode: v.code,
@@ -103,6 +129,9 @@ export function buildDataset(seed = SEED): SeedDataset {
   const invoices: InvoiceRow[] = [];
   const journalEntries: JournalEntryRow[] = [];
   const transactions: TransactionRow[] = [];
+  // Booked utilities per month (index m-1) — reused by the bank legs so the
+  // bank mirrors the GL exactly without consuming extra RNG.
+  const monthlyUtilities: number[] = [];
   let jeSeq = 0;
   let txSeq = 0;
 
@@ -116,9 +145,9 @@ export function buildDataset(seed = SEED): SeedDataset {
   const addLine = (
     je: JournalEntryRow, accountCode: string, debit: number, credit: number,
     opts: { vendorCode?: string | null; customerCode?: string | null; invoiceNumber?: string | null; description?: string; date?: Date } = {}
-  ) => {
+  ): TransactionRow => {
     txSeq += 1;
-    transactions.push({
+    const row: TransactionRow = {
       id: `tx_${String(txSeq).padStart(6, "0")}`,
       entryNumber: je.entryNumber,
       accountCode,
@@ -129,8 +158,12 @@ export function buildDataset(seed = SEED): SeedDataset {
       debit: money(debit),
       credit: money(credit),
       description: opts.description ?? je.memo,
-    });
+    };
+    transactions.push(row);
+    return row;
   };
+  // Principal (debit-side) GL line per invoice — bank settlement legs link here.
+  const principalTxByInvoice = new Map<string, string>();
 
   for (let m = 1; m <= 12; m++) {
     const mm = `${year}${pad2(m)}`;
@@ -189,8 +222,9 @@ export function buildDataset(seed = SEED): SeedDataset {
       });
       // GL: Dr COGS / Cr AP (double-entry, balanced by construction)
       const je = nextJe(issueDate, `AP ${invNumber} — ${v.name}`, "INVOICE_AP");
-      addLine(je, v.cogsAccountCode, subtotal, 0, { vendorCode: v.code, invoiceNumber: invNumber });
+      const dr = addLine(je, v.cogsAccountCode, subtotal, 0, { vendorCode: v.code, invoiceNumber: invNumber });
       addLine(je, "2000", 0, subtotal, { vendorCode: v.code, invoiceNumber: invNumber });
+      principalTxByInvoice.set(invNumber, dr.id);
     });
 
     // ---- Order-to-cash: 2 AR invoices per customer (10/month) ----
@@ -229,14 +263,16 @@ export function buildDataset(seed = SEED): SeedDataset {
         });
         // GL: Dr AR / Cr Revenue
         const je = nextJe(issueDate, `AR ${invNumber} — ${c.name}`, "INVOICE_AR");
-        addLine(je, "1100", total, 0, { customerCode: c.code, invoiceNumber: invNumber });
+        const dr = addLine(je, "1100", total, 0, { customerCode: c.code, invoiceNumber: invNumber });
         addLine(je, "4000", 0, total, { customerCode: c.code, invoiceNumber: invNumber });
+        principalTxByInvoice.set(invNumber, dr.id);
       });
     });
 
     // ---- Monthly opex (payroll / rent / utilities) ----
     const opexDate = utc(year, m, 28);
     const utilities = money(MONTHLY_OPEX.utilitiesBase * (1 + range(rng, -0.08, 0.08)));
+    monthlyUtilities.push(utilities);
     const opexLines = [
       { acct: "6000", amt: MONTHLY_OPEX.payroll, memo: `Payroll ${mm}`, source: "PAYROLL" },
       { acct: "6010", amt: MONTHLY_OPEX.rent, memo: `Rent ${mm}`, source: "MANUAL" },
@@ -246,6 +282,143 @@ export function buildDataset(seed = SEED): SeedDataset {
       const je = nextJe(opexDate, l.memo, l.source);
       addLine(je, l.acct, l.amt, 0, { description: l.memo });
       addLine(je, "1000", 0, l.amt, { description: l.memo });
+    }
+  }
+
+  // ---- Settlement: every PAID invoice clears through cash (P&L-neutral:
+  // only balance-sheet legs 1000/1100/2000, so aggregatePnl is unaffected) ----
+  for (const inv of invoices) {
+    if (inv.status !== "PAID" || !inv.dueDate) continue;
+    if (inv.type === "AP") {
+      const je = nextJe(inv.dueDate, `Settle ${inv.invoiceNumber} — ${inv.vendorCode}`, "MANUAL");
+      addLine(je, "2000", inv.total, 0, { vendorCode: inv.vendorCode, invoiceNumber: inv.invoiceNumber });
+      addLine(je, "1000", 0, inv.total, { vendorCode: inv.vendorCode, invoiceNumber: inv.invoiceNumber });
+    } else {
+      const je = nextJe(inv.dueDate, `Collect ${inv.invoiceNumber} — ${inv.customerCode}`, "MANUAL");
+      addLine(je, "1000", inv.total, 0, { customerCode: inv.customerCode, invoiceNumber: inv.invoiceNumber });
+      addLine(je, "1100", 0, inv.total, { customerCode: inv.customerCode, invoiceNumber: inv.invoiceNumber });
+    }
+  }
+
+  // ---- Bank legs: 1:1 mirror of settlement (amounts match invoice totals
+  // EXACTLY — no noise — so reconciliation is meaningful). Legs settling
+  // before September are RECONCILED; August/September legs stay PENDING, which
+  // is the demo surface for getBankTransactions/reconcileBankTransaction
+  // (the unpaid-at-close August Apex leg is a payment-hold candidate).
+  // NOTE: no RNG consumed below — the dataset above must stay byte-identical.
+  const bankAccounts: BankAccountRow[] = BANK_ACCOUNTS.map((b) => ({
+    id: `bank_${b.code.toLowerCase()}`,
+    code: b.code,
+    name: b.name,
+    currency: "USD",
+    openingBalance: money(b.openingBalance),
+  }));
+  const bankTransactions: BankTransactionRow[] = [];
+  let btSeq = 0;
+  const nextBt = (
+    bankCode: string, date: Date, description: string, amount: number,
+    opts: { externalId: string; invoiceNumber?: string | null; reconciled: boolean }
+  ) => {
+    btSeq += 1;
+    bankTransactions.push({
+      id: `bt_${String(btSeq).padStart(6, "0")}`,
+      bankCode,
+      date,
+      description,
+      amount: money(amount),
+      externalId: opts.externalId,
+      source: "MANUAL",
+      status: opts.reconciled ? "RECONCILED" : "PENDING",
+      invoiceNumber: opts.invoiceNumber ?? null,
+      glTransactionId:
+        (opts.invoiceNumber ? principalTxByInvoice.get(opts.invoiceNumber) : undefined) ?? null,
+    });
+  };
+  const settledBeforeSep = (d: Date) => d < utc(year, 9, 1);
+  for (const inv of invoices) {
+    if (inv.status !== "PAID" || !inv.dueDate) continue;
+    const reconciled = settledBeforeSep(inv.dueDate);
+    if (inv.type === "AP") {
+      nextBt("OPERATING", inv.dueDate, `Vendor payment ${inv.invoiceNumber}`, -inv.total, {
+        externalId: `EXT-${inv.invoiceNumber}`,
+        invoiceNumber: inv.invoiceNumber,
+        reconciled,
+      });
+    } else {
+      nextBt("OPERATING", inv.dueDate, `Customer collection ${inv.invoiceNumber}`, inv.total, {
+        externalId: `EXT-${inv.invoiceNumber}`,
+        invoiceNumber: inv.invoiceNumber,
+        reconciled,
+      });
+    }
+  }
+  // Opex rent/utilities leave operating; payroll is funded via transfer.
+  for (let m = 1; m <= 12; m++) {
+    const mm = `${year}${pad2(m)}`;
+    const opexDate = utc(year, m, 28);
+    const reconciled = settledBeforeSep(opexDate);
+    nextBt("OPERATING", opexDate, `Rent ${mm}`, -MONTHLY_OPEX.rent, {
+      externalId: `OPEX-${mm}-RENT`, reconciled,
+    });
+    nextBt("OPERATING", opexDate, `Utilities ${mm}`, -monthlyUtilities[m - 1], {
+      externalId: `OPEX-${mm}-UTIL`, reconciled,
+    });
+    const fundingDate = utc(year, m, PAYROLL_FUNDING_DAY);
+    const fundingReconciled = settledBeforeSep(fundingDate);
+    nextBt("OPERATING", fundingDate, `Payroll funding ${mm}`, -MONTHLY_OPEX.payroll, {
+      externalId: `XFER-${mm}-OP`, reconciled: fundingReconciled,
+    });
+    nextBt("PAYROLL", fundingDate, `Payroll funding ${mm}`, MONTHLY_OPEX.payroll, {
+      externalId: `XFER-${mm}-PY`, reconciled: fundingReconciled,
+    });
+    nextBt("PAYROLL", opexDate, `Payroll ${mm}`, -MONTHLY_OPEX.payroll, {
+      externalId: `PAY-${mm}`, reconciled,
+    });
+  }
+
+  // ---- Budgets: set at year start from BASE constants (no noise), so actuals
+  // vary around them and August blows through COGS. No RNG consumed. ----
+  const matBase = money(
+    VENDORS.filter((v) => v.cogsAccountCode === "5000")
+      .reduce((s, v) => s + v.baseQtyPerMonth * v.contractUnitPrice, 0)
+  );
+  const freightBase = money(
+    VENDORS.filter((v) => v.cogsAccountCode === "5010")
+      .reduce((s, v) => s + v.baseQtyPerMonth * v.contractUnitPrice, 0)
+  );
+  const budgets: BudgetRow[] = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = `${year}${pad2(m)}`;
+    const lines: Array<[string, number]> = [
+      ["4000", MONTHLY_REVENUE_BASE + MONTHLY_REVENUE_GROWTH * (m - 1)],
+      ["5000", matBase],
+      ["5010", freightBase],
+      ["6000", MONTHLY_OPEX.payroll],
+      ["6010", MONTHLY_OPEX.rent],
+      ["6020", MONTHLY_OPEX.utilitiesBase],
+    ];
+    for (const [acct, amt] of lines) {
+      budgets.push({ id: `bud_${mm}_${acct}`, accountCode: acct, year, month: m, amount: money(amt) });
+    }
+  }
+
+  // ---- Forecasts: BASE scenario mirrors the budget (revenue/COGS/opex). ----
+  const forecasts: ForecastRow[] = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = `${year}${pad2(m)}`;
+    const revenue = money(MONTHLY_REVENUE_BASE + MONTHLY_REVENUE_GROWTH * (m - 1));
+    const cogs = money(matBase + freightBase);
+    const opex = money(MONTHLY_OPEX.payroll + MONTHLY_OPEX.rent + MONTHLY_OPEX.utilitiesBase);
+    const lines: Array<[string, number]> = [
+      ["REVENUE", revenue],
+      ["COGS", cogs],
+      ["OPEX", opex],
+    ];
+    for (const [metric, amt] of lines) {
+      forecasts.push({
+        id: `fc_base_${metric.toLowerCase()}_${mm}`,
+        metric, year, month: m, amount: money(amt), scenario: "BASE",
+      });
     }
   }
 
@@ -265,6 +438,10 @@ export function buildDataset(seed = SEED): SeedDataset {
     invoices,
     journalEntries,
     transactions,
+    bankAccounts,
+    bankTransactions,
+    budgets,
+    forecasts,
     incident: {
       id: "incident_gm_aug2024",
       title: "Gross margin decline — August 2024",

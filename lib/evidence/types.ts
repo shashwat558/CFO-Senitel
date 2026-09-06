@@ -2,9 +2,8 @@
 //
 // Every material agent conclusion traces CLAIM → FINDING → CALCULATION →
 // source row → origin system. sourceType names the KIND of source row,
-// sourceId is that row's id. Kinds without a model yet (bank/forecast/budget/
-// document) are valid enum values but resolve to null until B4 lands —
-// resolution never fabricates a row.
+// sourceId is that row's id. Kinds without a model yet (forecast scenarios
+// beyond rows, documents) resolve to null — resolution never fabricates a row.
 
 import { z } from "zod";
 
@@ -33,6 +32,9 @@ export const RESOLVABLE_SOURCE_TYPES = [
   "INVOICE",
   "PURCHASE_ORDER",
   "CONTRACT",
+  "BANK_TRANSACTION",
+  "FORECAST",
+  "BUDGET",
 ] as const satisfies ReadonlyArray<EvidenceSourceType>;
 
 export function isResolvableSourceType(t: string): boolean {

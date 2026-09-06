@@ -24,6 +24,9 @@ const { db } = vi.hoisted(() => ({
     purchaseOrder: { findFirst: vi.fn() },
     transaction: { findFirst: vi.fn() },
     journalEntry: { findFirst: vi.fn() },
+    bankTransaction: { findFirst: vi.fn() },
+    forecast: { findFirst: vi.fn() },
+    budget: { findFirst: vi.fn() },
   },
 }));
 
@@ -119,10 +122,10 @@ describe("resolveEvidenceSource", () => {
 
   it("returns null + reason for unmodeled kinds and missing rows", async () => {
     const unmodeled = await resolveEvidenceSource(db as never, ORG_ID, {
-      sourceType: "BANK_TRANSACTION",
-      sourceId: "bank_1",
+      sourceType: "DOCUMENT",
+      sourceId: "doc_1",
     });
-    expect(unmodeled).toMatchObject({ kind: "BANK_TRANSACTION", row: null });
+    expect(unmodeled).toMatchObject({ kind: "DOCUMENT", row: null });
 
     db.contract.findFirst.mockResolvedValue(null);
     const missing = await resolveEvidenceSource(db as never, ORG_ID, {
@@ -130,6 +133,22 @@ describe("resolveEvidenceSource", () => {
       sourceId: "ctr_nope",
     });
     expect(missing).toMatchObject({ kind: "CONTRACT", row: null, reason: expect.any(String) });
+  });
+
+  it("resolves bank, forecast, and budget sources org-scoped", async () => {
+    db.bankTransaction.findFirst.mockResolvedValue({ id: "bt_1", amount: -40000 });
+    db.forecast.findFirst.mockResolvedValue({ id: "fc_1", amount: 1240000 });
+    db.budget.findFirst.mockResolvedValue({ id: "bud_1", amount: 700000 });
+    await expect(
+      resolveEvidenceSource(db as never, ORG_ID, { sourceType: "BANK_TRANSACTION", sourceId: "bt_1" })
+    ).resolves.toMatchObject({ kind: "BANK_TRANSACTION", row: { id: "bt_1" } });
+    await expect(
+      resolveEvidenceSource(db as never, ORG_ID, { sourceType: "FORECAST", sourceId: "fc_1" })
+    ).resolves.toMatchObject({ kind: "FORECAST", row: { id: "fc_1" } });
+    await expect(
+      resolveEvidenceSource(db as never, ORG_ID, { sourceType: "BUDGET", sourceId: "bud_1" })
+    ).resolves.toMatchObject({ kind: "BUDGET", row: { id: "bud_1" } });
+    expect(db.bankTransaction.findFirst).toHaveBeenCalledWith({ where: { id: "bt_1", orgId: ORG_ID } });
   });
 
   it("returns null when the row carries no lineage", async () => {

@@ -27,6 +27,10 @@ async function main() {
     prisma.invoice.deleteMany({ where: { orgId: ORG.id } }),
     prisma.purchaseOrder.deleteMany({ where: { orgId: ORG.id } }),
     prisma.contract.deleteMany({ where: { orgId: ORG.id } }),
+    prisma.bankTransaction.deleteMany({ where: { orgId: ORG.id } }),
+    prisma.budget.deleteMany({ where: { orgId: ORG.id } }),
+    prisma.forecast.deleteMany({ where: { orgId: ORG.id } }),
+    prisma.bankAccount.deleteMany({ where: { orgId: ORG.id } }),
     prisma.account.deleteMany({ where: { orgId: ORG.id } }),
     prisma.customer.deleteMany({ where: { orgId: ORG.id } }),
     prisma.vendor.deleteMany({ where: { orgId: ORG.id } }),
@@ -71,6 +75,12 @@ async function main() {
       await tx.account.createMany({
         data: ds.accounts.map((a) => ({
           id: a.id, orgId: ORG.id, code: a.code, name: a.name, type: a.type as never,
+        })),
+      });
+      await tx.bankAccount.createMany({
+        data: ds.bankAccounts.map((b) => ({
+          id: b.id, orgId: ORG.id, name: b.name, currency: b.currency,
+          openingBalance: b.openingBalance,
         })),
       });
 
@@ -140,6 +150,31 @@ async function main() {
       }
 
       const cfo = ds.users[0];
+      const bankId = (code: string) => `bank_${code.toLowerCase()}`;
+      for (const b of ds.bankTransactions) {
+        await tx.bankTransaction.create({
+          data: {
+            id: b.id, orgId: ORG.id, bankAccountId: bankId(b.bankCode),
+            date: b.date, description: b.description,
+            amount: b.amount, externalId: b.externalId, source: b.source as never,
+            status: b.status as never,
+            invoiceId: b.invoiceNumber ? invId.get(b.invoiceNumber) ?? null : null,
+            glTransactionId: b.glTransactionId,
+          },
+        });
+      }
+      await tx.budget.createMany({
+        data: ds.budgets.map((b) => ({
+          id: b.id, orgId: ORG.id, accountId: accountId(b.accountCode),
+          year: b.year, month: b.month, amount: b.amount,
+        })),
+      });
+      await tx.forecast.createMany({
+        data: ds.forecasts.map((f) => ({
+          id: f.id, orgId: ORG.id, metric: f.metric,
+          year: f.year, month: f.month, amount: f.amount, scenario: f.scenario,
+        })),
+      });
       await tx.financialIncident.create({
         data: {
           id: ds.incident.id, orgId: ORG.id, title: ds.incident.title,
@@ -170,7 +205,9 @@ async function main() {
   console.log(
     `Seeded: ${ds.vendors.length} vendors, ${ds.customers.length} customers, ` +
       `${ds.purchaseOrders.length} POs, ${ds.invoices.length} invoices, ` +
-      `${ds.journalEntries.length} journal entries, ${ds.transactions.length} lines.`
+      `${ds.journalEntries.length} journal entries, ${ds.transactions.length} lines, ` +
+      `${ds.bankAccounts.length} bank accounts, ${ds.bankTransactions.length} bank legs, ` +
+      `${ds.budgets.length} budgets, ${ds.forecasts.length} forecasts.`
   );
 }
 

@@ -4,7 +4,7 @@
 
 Agentic financial incident investigation and response platform.
 This phase establishes a working TypeScript modular monolith: Next.js + PostgreSQL + Prisma,
-deterministic financial services, the first 8 financial tools, thin APIs, and a basic UI shell.
+deterministic financial services, 13 financial tools, thin APIs, and a basic UI shell.
 
 > Rule: the LLM never computes authoritative financial numbers. Agent → Tool → Financial
 > Service → Prisma → PostgreSQL. The agent may decide *what* to investigate; only
@@ -93,8 +93,13 @@ components/               React UI (SiteNav, KpiCard)
 lib/
   financial/              DETERMINISTIC services (calculations.ts pure math,
                           pnl.ts GL aggregation). No LLM, no network.
-  tools/                  Agent-only DB surface: 8 validated tools + registry.
+  tools/                  Agent-only DB surface: 13 validated tools + registry.
                           Agent never touches Prisma directly.
+                          (P&L, spend, contracts, invoices, banks, budgets,
+                          forecasts, reconciliation.)
+  connectors/             Real-app import surface (stage 1: bank-CSV parser —
+                          pure parse+validate; persistence lands staged rows
+                          with source=CSV_IMPORT for reconciliation).
   services/               API business logic (dashboard, incidents, org).
   db/                     Prisma singleton. Only services/tools import it.
   validation/             Zod schemas (transport + tool inputs).
@@ -122,6 +127,16 @@ August 2024: Apex Steel invoices bill ~28% above contract — stored as data,
 never hardcoded as a conclusion. The demo question *"Why did gross margin fall
 in August?"* is answerable via `getPnl → comparePeriods → breakDownMetric →
 getVendorSpend → compareVendorPrices → calculateFinancialImpact`.
+
+### Cash, budgets, forecasts (seeded, queryable)
+
+Every `PAID` invoice settles through exactly one `BankTransaction` (amounts
+match invoice totals to the cent; pre-September legs ship `RECONCILED`, later
+legs stay `PENDING` for the reconciliation demo). Monthly `Budget` rows per
+account and `BASE` `Forecast` rows (revenue/COGS/opex) come from the same
+constants, so `getBudgetVsActual` shows the August COGS blowout and
+`reconcileBankTransaction` links pending legs with exact-cents + direction
+checks.
 
 ### Audit log
 

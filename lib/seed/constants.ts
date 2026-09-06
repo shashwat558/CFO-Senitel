@@ -85,3 +85,17 @@ export const INCIDENT = {
 export const MONTHLY_OPEX = { payroll: 145000, rent: 28000, utilitiesBase: 6500 };
 export const MONTHLY_REVENUE_BASE = 1200000;
 export const MONTHLY_REVENUE_GROWTH = 5000; // +$5k per month index
+
+// Bank legs mirror settled invoices 1:1 (see builder): collections in,
+// payments out, dated at the invoice paidAt. Amounts match invoice totals
+// EXACTLY (no noise) so reconciliation is meaningful.
+export const BANK_ACCOUNTS = [
+  { code: "OPERATING", name: "Operating Checking", openingBalance: 850000 },
+  { code: "PAYROLL", name: "Payroll Account", openingBalance: 200000 },
+];
+
+/** Day-of-month the operating account funds payroll. */
+export const PAYROLL_FUNDING_DAY = 25;
+
+/** Forecast metrics seeded under the BASE scenario. */
+export const FORECAST_METRICS = ["REVENUE", "COGS", "OPEX"] as const;

@@ -68,9 +68,9 @@ function mockDb(overrides: Record<string, unknown> = {}): PrismaClient {
 const ctx = (db: PrismaClient) => ({ db, orgId: "org_acme_industries" });
 
 describe("tool registry", () => {
-  it("exposes exactly the 8 Phase-1 tools", () => {
+  it("exposes exactly the 13 registered tools", () => {
     expect(TOOL_NAMES.sort()).toEqual(
-      ["breakDownMetric", "calculateFinancialImpact", "comparePeriods", "compareVendorPrices", "getContract", "getInvoices", "getPnl", "getVendorSpend"].sort()
+      ["breakDownMetric", "calculateFinancialImpact", "comparePeriods", "compareVendorPrices", "getBankBalance", "getBankTransactions", "getBudgetVsActual", "getContract", "getForecast", "getInvoices", "getPnl", "getVendorSpend", "reconcileBankTransaction"].sort()
     );
   });
 

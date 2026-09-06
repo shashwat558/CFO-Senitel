@@ -112,6 +112,15 @@ export async function resolveEvidenceSource(
     case "JOURNAL_ENTRY":
       row = await db.journalEntry.findFirst({ where: { id: ev.sourceId, orgId } });
       break;
+    case "BANK_TRANSACTION":
+      row = await db.bankTransaction.findFirst({ where: { id: ev.sourceId, orgId } });
+      break;
+    case "FORECAST":
+      row = await db.forecast.findFirst({ where: { id: ev.sourceId, orgId } });
+      break;
+    case "BUDGET":
+      row = await db.budget.findFirst({ where: { id: ev.sourceId, orgId } });
+      break;
   }
   if (!row) return { kind: ev.sourceType, row: null, reason: "source row not found in this org" };
   return { kind: ev.sourceType, row };

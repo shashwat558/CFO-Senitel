@@ -1,4 +1,4 @@
-// Agent-compatible tool adapter — exposes the 8 deterministic Phase-1 tools
+// Agent-compatible tool adapter — exposes the deterministic registered tools
 // to OpenAI tool calling WITHOUT rewriting the underlying financial tools.
 //
 // Flow: OpenAI tool definition -> Zod input validation (existing schemas)
@@ -15,7 +15,7 @@ import { auditToolCall, ToolError, type ToolContext } from "./types";
 // ---------------------------------------------------------------------------
 // Minimal Zod -> JSON Schema converter.
 //
-// Covers exactly the Zod surface used by the 8 tool input schemas:
+// Covers exactly the Zod surface used by the tool input schemas:
 // objects, strings (incl. datetime/format), numbers (int/min/max),
 // booleans, enums, arrays, optionals/defaults, refinements (ZodEffects),
 // nullable. Anything else degrades to {} rather than throwing, so schema
@@ -98,7 +98,7 @@ function isOptionalField(schema: z.ZodTypeAny): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// OpenAI tool definitions (LLM-compatible schemas for all 8 tools).
+// OpenAI tool definitions (LLM-compatible schemas for every registered tool).
 // ---------------------------------------------------------------------------
 
 export function toOpenAITool(name: string): ChatCompletionTool {
@@ -114,7 +114,7 @@ export function toOpenAITool(name: string): ChatCompletionTool {
   };
 }
 
-/** OpenAI `tools` array covering all 8 registered tools. */
+/** OpenAI `tools` array covering every registered tool. */
 export function getOpenAITools(): ChatCompletionTool[] {
   return TOOL_NAMES.map(toOpenAITool);
 }

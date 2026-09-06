@@ -26,13 +26,18 @@ const EXPECTED = [
   "getInvoices",
   "compareVendorPrices",
   "calculateFinancialImpact",
+  "getBankTransactions",
+  "getBankBalance",
+  "getBudgetVsActual",
+  "getForecast",
+  "reconcileBankTransaction",
 ];
 
 describe("agent-compatible tool adapter", () => {
-  it("exposes LLM-compatible schemas for all 8 tools", () => {
+  it("exposes LLM-compatible schemas for all registered tools", () => {
     expect(TOOL_NAMES.sort()).toEqual(EXPECTED.sort());
     const tools = getOpenAITools();
-    expect(tools).toHaveLength(8);
+    expect(tools).toHaveLength(13);
     for (const t of tools) {
       expect(t.type).toBe("function");
       expect(EXPECTED).toContain(t.function.name);

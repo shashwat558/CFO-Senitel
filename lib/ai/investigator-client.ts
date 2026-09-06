@@ -149,7 +149,7 @@ function mapError(err: unknown): InvestigatorError {
   if (err instanceof DOMException && err.name === "AbortError") {
     return new InvestigatorError("TIMEOUT", "OpenAI request aborted (timeout)", true);
   }
-  if (err instanceof Error && /OPENAI_API_KEY/.test(err.message)) {
+  if (err instanceof Error && /API key is set|OPENAI_API_KEY|GROQ_API_KEY/.test(err.message)) {
     return new InvestigatorError("CONFIG", err.message, false);
   }
   return new InvestigatorError(

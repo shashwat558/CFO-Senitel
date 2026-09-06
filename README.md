@@ -196,8 +196,19 @@ SDK `unwrap` before parsing.
 
 ## Environment
 
-See `.env.example`: `DATABASE_URL`, `OPENAI_API_KEY`, `MODEL_NAME`, and optional
+See `.env.example`: `DATABASE_URL`, LLM keys, `MODEL_NAME`, and optional
 `RATE_LIMIT_MAX_REQUESTS` / `RATE_LIMIT_WINDOW_MS`. Never hardcode secrets.
+
+### LLM backend (Groq free tier by default)
+
+The Investigator Agent talks OpenAI-compatible chat completions, defaulting to
+Groq — free, no credit card: sign up at https://console.groq.com, create a key,
+set `GROQ_API_KEY` (defaults for base URL + `llama-3.3-70b-versatile` already
+point there). One investigation ≈ 10 calls, inside free limits (30 req/min).
+`OPENAI_API_KEY` still works as a fallback key; point `OPENAI_BASE_URL` at
+`https://api.openai.com/v1` (with `MODEL_NAME=gpt-4o-mini`) to go back to
+OpenAI. Without any key the agent endpoints fail with a clear CONFIG error —
+deterministic services, tools, and the seeded demo never need a key.
 
 ## Definition of done (Phase 1)
 

@@ -19,9 +19,11 @@ const { db, runInvestigatorLoop } = vi.hoisted(() => ({
     agentRun: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
+      update: vi.fn(),
       count: vi.fn().mockResolvedValue(0),
     },
     agentStep: { findMany: vi.fn() },
+    auditLog: { create: vi.fn() },
   },
   runInvestigatorLoop: vi.fn(),
 }));
@@ -33,6 +35,7 @@ import { POST as investigatePost } from "../app/api/incidents/[id]/investigate/r
 import { GET as incidentGet } from "../app/api/incidents/[id]/route";
 import { GET as runsGet } from "../app/api/incidents/[id]/runs/route";
 import { GET as stepsGet } from "../app/api/incidents/[id]/runs/[runId]/steps/route";
+import { POST as cancelPost } from "../app/api/incidents/[id]/runs/[runId]/cancel/route";
 
 const ORG = { id: "org_acme_industries", name: "Acme Industries", slug: "acme-industries" };
 const SESSION_USER = {
@@ -377,5 +380,73 @@ describe("GET /api/incidents/[id]/runs/[runId]/steps", () => {
     });
     expect(res.status).toBe(404);
     expect(db.agentRun.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/incidents/[id]/runs/[runId]/cancel", () => {
+  const cancelUrl = `${baseUrl}/runs/run_1/cancel`;
+  const PARAMS = { id: INCIDENT.id, runId: "run_1" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDefaults();
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_1",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "RUNNING",
+    });
+    db.agentRun.update.mockResolvedValue({
+      id: "run_1",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "CANCELLED",
+    });
+  });
+
+  it("cancels a RUNNING run (org-scoped) and audits it", async () => {
+    const res = await cancelPost(new NextRequest(cancelUrl, { method: "POST" }), { params: PARAMS });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ runId: "run_1", status: "CANCELLED" });
+    expect(db.agentRun.update).toHaveBeenCalledWith({
+      where: { id: "run_1" },
+      data: { status: "CANCELLED", finishedAt: expect.any(Date) },
+    });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: ORG.id,
+        actorId: SESSION_USER.id,
+        action: "investigate.cancel",
+        entityType: "AgentRun",
+        entityId: "run_1",
+      }),
+    });
+  });
+
+  it("leaves a terminal run untouched (idempotent) and still audits", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_1", orgId: ORG.id, incidentId: INCIDENT.id, status: "COMPLETED",
+    });
+    const res = await cancelPost(new NextRequest(cancelUrl, { method: "POST" }), { params: PARAMS });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ runId: "run_1", status: "COMPLETED" });
+    expect(db.agentRun.update).not.toHaveBeenCalled();
+    expect(db.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 404 when the run does not belong to the incident", async () => {
+    db.agentRun.findFirst.mockResolvedValue(null);
+    const res = await cancelPost(new NextRequest(cancelUrl, { method: "POST" }), { params: PARAMS });
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("run") });
+    expect(db.agentRun.update).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the incident is not in the org (org isolation before the run lookup)", async () => {
+    db.financialIncident.findFirst.mockResolvedValue(null);
+    const res = await cancelPost(new NextRequest(cancelUrl, { method: "POST" }), { params: PARAMS });
+    expect(res.status).toBe(404);
+    expect(db.agentRun.findFirst).not.toHaveBeenCalled();
+    expect(db.agentRun.update).not.toHaveBeenCalled();
   });
 });

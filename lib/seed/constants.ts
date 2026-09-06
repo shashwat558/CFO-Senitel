@@ -82,6 +82,34 @@ export const INCIDENT = {
   note: "Unapproved supplier surcharge applied to August Apex Steel invoices",
 };
 
+/** Cash-crisis injection (data facts, not conclusions). AUTOFAB — 28% of
+ * revenue — stops paying in H2: all twelve Jul–Dec invoices go OVERDUE, so a
+ * 13-week forecast from 2025-01-01 shows collections collapsing against firm
+ * outflows, including a large year-end inventory build due mid-January. */
+export const CASH_CRISIS = {
+  overdueCustomerCode: "AUTOFAB",
+  overdueMonths: [7, 8, 9, 10, 11, 12], // H2 invoices go OVERDUE (payment stop)
+  bulkVendorCode: "GLC",
+  bulkMonth: 12,
+  bulkMaterial: "STEEL_BRACKET",
+  bulkUnitOfMeasure: "UNIT",
+  bulkUnitPrice: 12.5, // == contract price: no pricing anomaly, pure timing
+  bulkQty: 48000, // $600,000 year-end inventory build, SENT, due 2025-01-15
+  note: "Delayed AUTOFAB remittance plus January inventory commitment",
+};
+
+/** Revenue-leakage injection (data facts, not conclusions). November LAKESIDE
+ * ships only its first split (second never billed → MISSING_INVOICE), while
+ * December NORTHSTAR splits 0.4 into 0.2+0.2 at the same total (a legitimate
+ * timing/structure change the classifier must NOT flag as leakage). */
+export const LEAKAGE = {
+  missingCustomerCode: "LAKESIDE",
+  missingMonth: 11,
+  legitCustomerCode: "NORTHSTAR",
+  legitMonth: 12,
+  note: "Unbilled LAKESIDE split vs legitimate NORTHSTAR re-split",
+};
+
 export const MONTHLY_OPEX = { payroll: 145000, rent: 28000, utilitiesBase: 6500 };
 export const MONTHLY_REVENUE_BASE = 1200000;
 export const MONTHLY_REVENUE_GROWTH = 5000; // +$5k per month index

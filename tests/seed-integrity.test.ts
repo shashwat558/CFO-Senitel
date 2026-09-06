@@ -13,13 +13,16 @@ describe("seed integrity (no DB required — tests the builder)", () => {
   });
 
   it("covers 12 months with expected row counts", () => {
-    expect(ds.purchaseOrders).toHaveLength(5 * 12); // 5 vendors × 12 months
-    expect(ds.invoices.filter((i) => i.type === "AP")).toHaveLength(60);
+    // 5 vendors × 12 months + 1 December bulk inventory PO
+    expect(ds.purchaseOrders).toHaveLength(5 * 12 + 1);
+    expect(ds.invoices.filter((i) => i.type === "AP")).toHaveLength(60 + 1);
+    // AR unchanged in total: −1 LAKESIDE Nov split, +1 NORTHSTAR Dec split
     expect(ds.invoices.filter((i) => i.type === "AR")).toHaveLength(120);
-    // 60 AP + 120 AR + 36 opex + 135 settlement (one per PAID invoice) entries
-    expect(ds.journalEntries).toHaveLength(216 + 135);
+    // 60 AP + 120 AR + 36 opex + 121 settlement
+    // (PAID minus 6 H2 AUTOFAB minus 8 stalled September) + 1 bulk entries
+    expect(ds.journalEntries).toHaveLength(216 + 121 + 1);
     // every entry has exactly 2 balanced lines
-    expect(ds.transactions).toHaveLength(432 + 270);
+    expect(ds.transactions).toHaveLength(432 + 242 + 2);
   });
 
   it("every journal entry balances (sum debit == sum credit)", () => {
@@ -126,9 +129,9 @@ describe("seed integrity (no DB required — tests the builder)", () => {
   });
 
   it("seeds monthly budgets and BASE forecasts from the same constants", () => {
-    // 6 accounts × 12 months; 3 metrics × 12 months
+    // 6 accounts × 12 months; 3 metrics × 15 months (through Mar 2025)
     expect(ds.budgets).toHaveLength(72);
-    expect(ds.forecasts).toHaveLength(36);
+    expect(ds.forecasts).toHaveLength(45);
     expect(new Set(ds.forecasts.map((f) => f.scenario))).toEqual(new Set(["BASE"]));
     const janRev = ds.budgets.find((b) => b.accountCode === "4000" && b.month === 1)!;
     expect(janRev.amount).toBe(1200000);
@@ -136,6 +139,60 @@ describe("seed integrity (no DB required — tests the builder)", () => {
     expect(janFc.amount).toBe(1200000);
     // budget/forecast ids are unique
     expect(new Set(ds.budgets.map((b) => b.id)).size).toBe(72);
-    expect(new Set(ds.forecasts.map((f) => f.id)).size).toBe(36);
+    expect(new Set(ds.forecasts.map((f) => f.id)).size).toBe(45);
+    const mar25 = ds.forecasts.find((f) => f.metric === "REVENUE" && f.year === 2025 && f.month === 3)!;
+    expect(mar25.amount).toBe(1200000 + 5000 * 14);
+  });
+
+  it("injects the cash-crunch facts (overdue AUTOFAB, bulk GLC commitment)", () => {
+    const h2Autofab = ds.invoices.filter(
+      (i) => i.type === "AR" && i.customerCode === "AUTOFAB" && [6, 7, 8, 9, 10, 11].includes(i.issueDate.getUTCMonth())
+    );
+    expect(h2Autofab).toHaveLength(12);
+    for (const inv of h2Autofab) expect(inv.status).toBe("OVERDUE");
+    // September collections stall across the book (worsening aging)
+    const sepOther = ds.invoices.filter(
+      (i) => i.type === "AR" && i.issueDate.getUTCMonth() === 8 && i.customerCode !== "AUTOFAB"
+    );
+    expect(sepOther).toHaveLength(8);
+    for (const inv of sepOther) expect(inv.status).toBe("OVERDUE");
+    // overdue invoices never settle: no JE lines, no bank legs
+    for (const inv of h2Autofab) {
+      expect(ds.transactions.some((t) => t.invoiceNumber === inv.invoiceNumber && /^(Settle|Collect) /.test(t.description))).toBe(false);
+      expect(ds.bankTransactions.some((b) => b.invoiceNumber === inv.invoiceNumber)).toBe(false);
+    }
+    const bulk = ds.invoices.find((i) => i.invoiceNumber === "AP-202412-GLC-02")!;
+    expect(bulk.total).toBe(600000);
+    expect(bulk.status).toBe("SENT");
+    expect(bulk.dueDate).toEqual(new Date(Date.UTC(2025, 0, 15)));
+    // at exactly contract price: timing crunch, not a pricing anomaly
+    expect(bulk.unitPrice).toBe(12.5);
+    const bulkPo = ds.purchaseOrders.find((p) => p.poNumber === "PO-202412-GLC-02")!;
+    expect(bulkPo.total).toBe(600000);
+  });
+
+  it("injects the leakage pair (missing vs legitimate split change)", () => {
+    const novLake = ds.invoices.filter(
+      (i) => i.type === "AR" && i.customerCode === "LAKESIDE" && i.issueDate.getUTCMonth() === 10
+    );
+    expect(novLake.map((i) => i.invoiceNumber)).toEqual(["AR-202411-LAKESIDE-01"]);
+    const decNorth = ds.invoices
+      .filter((i) => i.type === "AR" && i.customerCode === "NORTHSTAR" && i.issueDate.getUTCMonth() === 11)
+      .map((i) => i.invoiceNumber)
+      .sort();
+    expect(decNorth).toEqual([
+      "AR-202412-NORTHSTAR-01",
+      "AR-202412-NORTHSTAR-02",
+      "AR-202412-NORTHSTAR-03",
+    ]);
+  });
+
+  it("seeds all three incidents with distinct types", () => {
+    expect(ds.incidents.map((i) => i.id).sort()).toEqual(
+      ["incident_cash_q1_2025", "incident_gm_aug2024", "incident_leakage_nov2024"].sort()
+    );
+    expect(new Set(ds.incidents.map((i) => i.type))).toEqual(
+      new Set(["GROSS_MARGIN_DECLINE", "CASH_CRISIS", "REVENUE_LEAKAGE"])
+    );
   });
 });

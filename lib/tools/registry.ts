@@ -18,6 +18,10 @@ import { getBankBalanceTool } from "./getBankBalance";
 import { getBudgetVsActualTool } from "./getBudgetVsActual";
 import { getForecastTool } from "./getForecast";
 import { reconcileBankTransactionTool } from "./reconcileBankTransaction";
+import { getCashForecastTool } from "./getCashForecast";
+import { getArAgingTool } from "./getArAging";
+import { getApAgingTool } from "./getApAging";
+import { compareCustomerBillingTool } from "./compareCustomerBilling";
 
 export const TOOL_REGISTRY: Record<string, ToolDefinition<never, unknown>> = {
   [getPnlTool.name]: getPnlTool as unknown as ToolDefinition<never, unknown>,
@@ -33,6 +37,10 @@ export const TOOL_REGISTRY: Record<string, ToolDefinition<never, unknown>> = {
   [getBudgetVsActualTool.name]: getBudgetVsActualTool as unknown as ToolDefinition<never, unknown>,
   [getForecastTool.name]: getForecastTool as unknown as ToolDefinition<never, unknown>,
   [reconcileBankTransactionTool.name]: reconcileBankTransactionTool as unknown as ToolDefinition<never, unknown>,
+  [getCashForecastTool.name]: getCashForecastTool as unknown as ToolDefinition<never, unknown>,
+  [getArAgingTool.name]: getArAgingTool as unknown as ToolDefinition<never, unknown>,
+  [getApAgingTool.name]: getApAgingTool as unknown as ToolDefinition<never, unknown>,
+  [compareCustomerBillingTool.name]: compareCustomerBillingTool as unknown as ToolDefinition<never, unknown>,
 };
 
 export const TOOL_NAMES = Object.keys(TOOL_REGISTRY);

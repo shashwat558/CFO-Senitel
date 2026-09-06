@@ -31,13 +31,17 @@ const EXPECTED = [
   "getBudgetVsActual",
   "getForecast",
   "reconcileBankTransaction",
+  "getCashForecast",
+  "getArAging",
+  "getApAging",
+  "compareCustomerBilling",
 ];
 
 describe("agent-compatible tool adapter", () => {
   it("exposes LLM-compatible schemas for all registered tools", () => {
     expect(TOOL_NAMES.sort()).toEqual(EXPECTED.sort());
     const tools = getOpenAITools();
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(17);
     for (const t of tools) {
       expect(t.type).toBe("function");
       expect(EXPECTED).toContain(t.function.name);

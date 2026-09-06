@@ -175,15 +175,17 @@ async function main() {
           year: f.year, month: f.month, amount: f.amount, scenario: f.scenario,
         })),
       });
-      await tx.financialIncident.create({
-        data: {
-          id: ds.incident.id, orgId: ORG.id, title: ds.incident.title,
-          description: ds.incident.description, type: ds.incident.type as never,
-          status: ds.incident.status as never, severity: ds.incident.severity as never,
-          periodStart: ds.incident.periodStart, periodEnd: ds.incident.periodEnd,
-          createdById: cfo.id,
-        },
-      });
+      for (const inc of ds.incidents) {
+        await tx.financialIncident.create({
+          data: {
+            id: inc.id, orgId: ORG.id, title: inc.title,
+            description: inc.description, type: inc.type as never,
+            status: inc.status as never, severity: inc.severity as never,
+            periodStart: inc.periodStart, periodEnd: inc.periodEnd,
+            createdById: cfo.id,
+          },
+        });
+      }
 
       // Every AuditLog row carries an actor; the seed's system action is
       // attributed to the org's default user (Maya Chen, the v1 session user).

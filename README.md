@@ -4,7 +4,7 @@
 
 Agentic financial incident investigation and response platform.
 This phase establishes a working TypeScript modular monolith: Next.js + PostgreSQL + Prisma,
-deterministic financial services, 13 financial tools, thin APIs, and a basic UI shell.
+deterministic financial services, 17 financial tools, thin APIs, and a basic UI shell.
 
 > Rule: the LLM never computes authoritative financial numbers. Agent → Tool → Financial
 > Service → Prisma → PostgreSQL. The agent may decide *what* to investigate; only
@@ -93,10 +93,11 @@ components/               React UI (SiteNav, KpiCard)
 lib/
   financial/              DETERMINISTIC services (calculations.ts pure math,
                           pnl.ts GL aggregation). No LLM, no network.
-  tools/                  Agent-only DB surface: 13 validated tools + registry.
+  tools/                  Agent-only DB surface: 17 validated tools + registry.
                           Agent never touches Prisma directly.
                           (P&L, spend, contracts, invoices, banks, budgets,
-                          forecasts, reconciliation.)
+                          forecasts, reconciliation, cash forecast, aging,
+                          billing comparison.)
   connectors/             Real-app import surface — read-only by design:
                           Dodo Payments pull (payments/payouts/refunds) →
                           StagedRecord → FX + promote into Invoice/Customer/
@@ -138,6 +139,21 @@ account and `BASE` `Forecast` rows (revenue/COGS/opex) come from the same
 constants, so `getBudgetVsActual` shows the August COGS blowout and
 `reconcileBankTransaction` links pending legs with exact-cents + direction
 checks.
+
+### Cash crisis + revenue leakage (seeded, queryable)
+
+AUTOFAB (28% of revenue) stops paying in H2 — all twelve Jul–Dec invoices go
+`OVERDUE` — September collections stall book-wide, and a $600k December GLC
+inventory build lands due 2025-01-15. From 2025-01-01 the 13-week forecast
+(`getCashForecast`: haircut-adjusted collections trickling over leading weeks,
+firm AP, payroll/opex/COGS run-rates from trailing GL, forward BASE sales)
+dips to ~$144k against the $1M floor: shortfall ≈ $856k with the GLC
+commitment and concentrated Apex payables as top drivers. November LAKESIDE
+ships one split instead of two (`compareCustomerBilling` → `MISSING_INVOICE`,
+−37% vs trailing), while December NORTHSTAR's 3-way re-split at the same total
+reads `TIMING` — the legitimate counterexample. Three incidents ship:
+`incident_gm_aug2024`, `incident_cash_q1_2025` (`CRITICAL`), and
+`incident_leakage_nov2024`.
 
 ### Audit log
 

@@ -32,6 +32,13 @@ export class ConflictError extends ServiceError {
   }
 }
 
+export class ForbiddenError extends ServiceError {
+  constructor(message: string) {
+    super("FORBIDDEN", message, 403);
+    this.name = "ForbiddenError";
+  }
+}
+
 export class MissingOrgError extends ServiceError {
   constructor() {
     super("NO_ORG", "no organization found — run `npx prisma db seed` first", 503);

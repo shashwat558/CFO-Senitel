@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { KpiCard } from "@/components/KpiCard";
+import { TrendChart, VendorBarChart } from "@/components/TrendChart";
+import { fmtPct, fmtPP, fmtSignedUSD, fmtUSD } from "@/lib/format";
+import { useToast } from "@/components/Toasts";
 
 interface TrendRow {
   year: number; month: number; revenue: number; cogs: number;
@@ -22,13 +25,12 @@ interface DashboardResp {
 
 const MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const YEAR_OPTIONS = [2024, 2025, 2026];
-const fmt$ = (n: number) =>
-  n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [year, setYear] = useState<number>(2024);
+  const { push } = useToast();
 
   const load = useCallback(async (y: number) => {
     try {
@@ -38,9 +40,11 @@ export default function DashboardPage() {
       setData(j);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "dashboard failed");
+      const msg = e instanceof Error ? e.message : "dashboard failed";
+      setError(msg);
+      push(msg, "error");
     }
-  }, []);
+  }, [push]);
 
   useEffect(() => {
     load(year);
@@ -81,8 +85,6 @@ export default function DashboardPage() {
   }
 
   const mom = data.monthOverMonth;
-  const latestMonth = data.latest.month;
-  const priorMonth = latestMonth - 1 >= 1 ? latestMonth - 1 : null;
 
   return (
     <>
@@ -139,28 +141,28 @@ export default function DashboardPage() {
         <KpiCard
           label="Audited Revenue (Latest)"
           tag="USD"
-          value={fmt$(data.latest.revenue)}
-          delta={`${mom.revenueVariance >= 0 ? "+" : ""}${fmt$(mom.revenueVariance)} MoM`}
+          value={fmtUSD(data.latest.revenue)}
+          delta={`${fmtSignedUSD(mom.revenueVariance)} MoM`}
           deltaTone={mom.revenueVariance >= 0 ? "pos" : "neg"}
         />
         <KpiCard
           label="COGS Expenditure"
           tag="USD"
-          value={fmt$(data.latest.cogs)}
-          delta={`${mom.cogsVariance >= 0 ? "+" : ""}${fmt$(mom.cogsVariance)} MoM`}
+          value={fmtUSD(data.latest.cogs)}
+          delta={`${fmtSignedUSD(mom.cogsVariance)} MoM`}
           deltaTone={mom.cogsVariance <= 0 ? "pos" : "neg"}
         />
         <KpiCard
           label="Gross Margin"
           tag="PERCENT"
-          value={`${data.latest.grossMargin.toFixed(2)}%`}
-          delta={`${mom.grossMarginVariance >= 0 ? "+" : ""}${mom.grossMarginVariance.toFixed(2)}pp MoM`}
+          value={fmtPct(data.latest.grossMargin)}
+          delta={`${fmtPP(mom.grossMarginVariance)} MoM`}
           deltaTone={mom.grossMarginVariance >= 0 ? "pos" : "neg"}
         />
         <KpiCard
           label="Net Operating Income"
           tag="USD"
-          value={fmt$(data.latest.netIncome)}
+          value={fmtUSD(data.latest.netIncome)}
           delta="Audited Close"
           deltaTone="neutral"
         />
@@ -190,138 +192,11 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Monthly Trend Spec Table */}
-      <div className="spec-table-container">
-        <div className="spec-table-header">
-          <div className="spec-table-title font-mono">
-            <span>// MONTHLY PERFORMANCE LEDGER</span>
-            <span className="spec-table-subtitle">FY {data.latest.year} P&amp;L AGGREGATE</span>
-          </div>
-          <span className="telemetry-chip font-mono">POSTGRES DOUBLE-ENTRY</span>
-        </div>
+      {/* Monthly Trend Chart (replaces ledger table) */}
+      <TrendChart trend={data.trend} anomalyMonth={year === 2024 ? 8 : -1} />
 
-        <div className="spec-table-box">
-          <table>
-            <thead>
-              <tr>
-                <th>Period</th>
-                <th>Revenue</th>
-                <th>COGS</th>
-                <th>Gross Profit</th>
-                <th>Gross Margin</th>
-                <th>Close Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.trend.map((t) => {
-                const isLatest = t.month === latestMonth;
-                const isPrior = t.month === priorMonth;
-                const isAnomaly = year === 2024 && t.month === 8;
-                const cls = isAnomaly
-                  ? "highlight-anomaly"
-                  : isLatest
-                  ? "highlight-latest"
-                  : isPrior
-                  ? "highlight-prior"
-                  : "";
-
-                return (
-                  <tr key={t.month} className={cls}>
-                    <td>
-                      <span className="month-label font-mono">
-                        {MONTHS[t.month]} {t.year}
-                      </span>
-                    </td>
-                    <td>{fmt$(t.revenue)}</td>
-                    <td>{fmt$(t.cogs)}</td>
-                    <td>{fmt$(t.grossProfit)}</td>
-                    <td>
-                      <span
-                        style={{
-                          fontWeight: 700,
-                          color: isAnomaly ? "var(--lp-red)" : "inherit",
-                        }}
-                      >
-                        {t.grossMargin.toFixed(2)}%
-                      </span>
-                    </td>
-                    <td>
-                      {isAnomaly ? (
-                        <span className="badge-tag critical">ANOMALY</span>
-                      ) : isLatest ? (
-                        <span className="badge-tag" style={{ background: "var(--lp-green-bg)", color: "var(--lp-green)", borderColor: "var(--lp-green-border)" }}>
-                          LATEST CLOSE
-                        </span>
-                      ) : isPrior ? (
-                        <span className="badge-tag" style={{ background: "var(--lp-amber-bg)", color: "var(--lp-amber)", borderColor: "var(--lp-amber-border)" }}>
-                          PRIOR CLOSE
-                        </span>
-                      ) : (
-                        <span className="badge-tag" style={{ background: "#f1f5f9", color: "var(--lp-fg-muted)", borderColor: "#e2e8f0" }}>
-                          POSTED
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Top Vendors Table */}
-      <div className="spec-table-container" style={{ marginTop: 36 }}>
-        <div className="spec-table-header">
-          <div className="spec-table-title font-mono">
-            <span>// TOP SUPPLIER EXPENDITURES</span>
-            <span className="spec-table-subtitle">
-              LATEST MONTH TOTAL: {fmt$(data.totalSpendLatestMonth)}
-            </span>
-          </div>
-          <span className="telemetry-chip font-mono">PROCURE-TO-PAY</span>
-        </div>
-
-        <div className="spec-table-box">
-          <table>
-            <thead>
-              <tr>
-                <th>Vendor / Counterparty</th>
-                <th>Total Invoiced Spend</th>
-                <th>Invoices Count</th>
-                <th>Expenditure Share</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.topVendors.map((v) => {
-                const sharePct = data.totalSpendLatestMonth > 0
-                  ? ((v.totalSpend / data.totalSpendLatestMonth) * 100).toFixed(1)
-                  : "0.0";
-                return (
-                  <tr key={v.vendorName}>
-                    <td>
-                      <strong>{v.vendorName}</strong>
-                    </td>
-                    <td>{fmt$(v.totalSpend)}</td>
-                    <td>{v.invoiceCount}</td>
-                    <td>
-                      <div className="spend-share-cell font-mono">
-                        <span>{sharePct}%</span>
-                        <div className="spend-share-bar">
-                          <div
-                            className="spend-share-fill"
-                            style={{ width: `${Math.min(100, Number(sharePct))}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Top Vendors Chart */}
+      <VendorBarChart vendors={data.topVendors} total={data.totalSpendLatestMonth} />
     </>
   );
 }

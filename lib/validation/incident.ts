@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { orgIdSchema } from "./common";
 
+// The tenant is NOT part of the transport contract: orgId always comes from
+// the session (lib/auth/session.ts) and any client-supplied orgId is stripped
+// by Zod before a write — the API can never be spoofed into another org.
 export const createIncidentSchema = z
   .object({
-    orgId: orgIdSchema,
     title: z.string().min(3).max(200),
     description: z.string().max(5000).default(""),
     type: z

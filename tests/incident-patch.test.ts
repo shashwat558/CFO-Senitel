@@ -9,7 +9,6 @@ import { NextRequest } from "next/server";
 
 const { db } = vi.hoisted(() => ({
   db: {
-    organization: { findUnique: vi.fn(), findFirst: vi.fn() },
     financialIncident: { findFirst: vi.fn(), update: vi.fn() },
     user: { findFirst: vi.fn() },
     auditLog: { create: vi.fn() },
@@ -29,15 +28,26 @@ const INCIDENT = {
   resolvedAt: null,
   assignedToId: null,
 };
-const USER_CONTROLLER = { id: "user_priya_nair", orgId: ORG.id, role: "CONTROLLER", name: "Priya Nair" };
+const SESSION_USER = {
+  id: "user_maya_chen",
+  email: "maya.chen@acme.example",
+  name: "Maya Chen",
+  role: "CFO",
+  orgId: ORG.id,
+};
+const USER_CONTROLLER = { id: "user_okafor", orgId: ORG.id, role: "CONTROLLER", name: "David Okafor" };
 
 function mockDefaults() {
-  db.organization.findUnique.mockResolvedValue(ORG);
   db.financialIncident.findFirst.mockResolvedValue(INCIDENT);
   db.financialIncident.update.mockImplementation(
     async ({ data }: { data: Record<string, unknown> }) => ({ ...INCIDENT, ...data })
   );
-  db.user.findFirst.mockResolvedValue(USER_CONTROLLER);
+  // Session resolution (getSession: findFirst WITHOUT orgId → the seeded
+  // default user, Maya Chen), while assignee lookups (findFirst WITH orgId)
+  // resolve to an org user.
+  db.user.findFirst.mockImplementation(({ where }: { where: Record<string, unknown> }) =>
+    Promise.resolve(where.orgId ? USER_CONTROLLER : SESSION_USER)
+  );
   db.auditLog.create.mockResolvedValue({});
 }
 
@@ -70,6 +80,7 @@ describe("PATCH /api/incidents/[id]", () => {
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orgId: ORG.id,
+        actorId: SESSION_USER.id,
         action: "incident.status",
         entityType: "FinancialIncident",
         entityId: INCIDENT.id,
@@ -162,10 +173,22 @@ describe("PATCH /api/incidents/[id]", () => {
   });
 
   it("returns 404 when the assignee is not an org user", async () => {
-    db.user.findFirst.mockResolvedValue(null);
+    // Session still resolves (findFirst without orgId); the assignee lookup
+    // (findFirst with orgId) misses → the assignee is invisible to this org.
+    db.user.findFirst.mockImplementation(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve(where.orgId ? null : SESSION_USER)
+    );
     const res = await patch({ assignedToId: "user_ghost" });
     expect(res.status).toBe(404);
     await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("assignee not found") });
+    expect(db.financialIncident.update).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 when no session user exists (seed not run)", async () => {
+    db.user.findFirst.mockResolvedValue(null);
+    const res = await patch({ status: "INVESTIGATING" });
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("no default user") });
     expect(db.financialIncident.update).not.toHaveBeenCalled();
   });
 

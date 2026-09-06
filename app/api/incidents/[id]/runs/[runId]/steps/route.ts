@@ -1,21 +1,22 @@
 // GET /api/incidents/[id]/runs/[runId]/steps — list AgentStep rows for one
 // run of an incident. Org-scoped: incident and run must both belong to the
-// default org (404 otherwise).
+// session org (404 otherwise).
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { getIncident } from "@/lib/services/incidents";
-import { getDefaultOrg } from "@/lib/services/org";
+import { getSession } from "@/lib/auth/session";
 import { NotFoundError, toStatus } from "@/lib/services/errors";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: Request, { params }: { params: { id: string; runId: string } }) {
   try {
-    const org = await getDefaultOrg(prisma);
-    await getIncident(prisma, org.id, params.id);
+    const session = await getSession(prisma);
+    const orgId = session.user.orgId;
+    await getIncident(prisma, orgId, params.id);
     const run = await prisma.agentRun.findFirst({
-      where: { id: params.runId, orgId: org.id, incidentId: params.id },
+      where: { id: params.runId, orgId, incidentId: params.id },
     });
     if (!run) throw new NotFoundError("agent run not found");
     const items = await prisma.agentStep.findMany({

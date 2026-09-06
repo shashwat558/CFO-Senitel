@@ -46,6 +46,13 @@ export class MissingOrgError extends ServiceError {
   }
 }
 
+export class UnauthenticatedError extends ServiceError {
+  constructor(message = "unauthenticated") {
+    super("UNAUTHENTICATED", message, 401);
+    this.name = "UnauthenticatedError";
+  }
+}
+
 export function toStatus(e: unknown, fallback = 500): number {
   if (e instanceof ServiceError) return e.status;
   const s = (e as { status?: unknown }).status;

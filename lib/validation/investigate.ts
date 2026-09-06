@@ -11,7 +11,8 @@ export const investigateIncidentSchema = z.object({
   // Cost cap: bound LLM retries per call; the loop already slices every
   // tool result to 8k chars before feeding it back.
   maxLlmRetries: z.number().int().min(0).max(5).optional(),
-  actorId: z.string().min(1).max(200).optional(),
+  // NOTE: no actorId field — the audit actor is the session user, never a
+  // client-supplied id (same spoofing rule as orgId on incident create).
 });
 
 export type InvestigateIncidentInput = z.infer<typeof investigateIncidentSchema>;

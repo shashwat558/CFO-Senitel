@@ -109,7 +109,12 @@ export function verifyAgainstFresh(
  * Returns the persisted action + VerificationResult (+ incident row, which the
  * runner may auto-transition to RESOLVED/CLOSED on a pass).
  */
-export async function verifyAction(db: PrismaClient, orgId: string, actionId: string) {
+export async function verifyAction(
+  db: PrismaClient,
+  orgId: string,
+  actionId: string,
+  opts: { actorId?: string | null } = {}
+) {
   const action = await db.incidentAction.findFirst({
     where: { id: actionId, incident: { orgId } },
     include: { incident: true },
@@ -180,7 +185,7 @@ export async function verifyAction(db: PrismaClient, orgId: string, actionId: st
   await db.auditLog.create({
     data: {
       orgId,
-      actorId: null,
+      actorId: opts.actorId ?? null,
       action: "action.verify",
       entityType: "IncidentAction",
       entityId: action.id,

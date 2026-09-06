@@ -141,12 +141,24 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       throw e;
     }
 
+    // An external cancel (POST /runs/[runId]/cancel) may have transitioned the
+    // run to CANCELLED after the loop finished ticking. Re-read the persisted
+    // row so the response reflects the authoritative state the UI polls.
+    const persisted = await prisma.agentRun.findFirst({
+      where: { id: result.runId, orgId, incidentId: params.id },
+      select: { status: true, output: true },
+    });
+    const effectiveStatus: LoopStatus =
+      persisted && persisted.status === "CANCELLED"
+        ? "CANCELLED"
+        : result.status;
+
     // Distinct outcome codes: 200 (COMPLETED / budget-exhausted MAX_ITERATIONS),
     // 500 (FAILED), 499 (CANCELLED by timeout or client disconnect). The
     // AgentRun row records the full detail for /runs consumers.
     return NextResponse.json(
-      { status: result.status, runId: result.runId },
-      { status: LOOP_STATUS_HTTP[result.status] }
+      { status: effectiveStatus, runId: result.runId },
+      { status: LOOP_STATUS_HTTP[effectiveStatus] }
     );
   } catch (e) {
     return NextResponse.json(

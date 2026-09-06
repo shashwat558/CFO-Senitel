@@ -352,6 +352,10 @@ describe("executeAction — execution worker stub", () => {
   it("returns 404 for an action outside the org", async () => {
     db.incidentAction.findFirst.mockResolvedValue(null);
     await expect(execute("action_missing")).rejects.toMatchObject({ status: 404 });
+    // org isolation: the lookup is scoped through the incident relation
+    expect(db.incidentAction.findFirst).toHaveBeenCalledWith({
+      where: { id: "action_missing", incident: { orgId: ORG.id } },
+    });
   });
 });
 

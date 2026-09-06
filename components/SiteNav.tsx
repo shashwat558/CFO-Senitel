@@ -40,6 +40,7 @@ export function SiteNav() {
           {navLink("/dashboard", "DASHBOARD")}
           {navLink("/incidents", "INCIDENTS")}
           {navLink("/approvals", "APPROVALS")}
+          {navLink("/audit", "AUDIT")}
           {navLink("/", "OVERVIEW")}
         </nav>
 

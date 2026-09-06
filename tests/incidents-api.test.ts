@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { LoopStatus } from "../lib/agent/investigator-loop";
+import { resetRateLimiter } from "../lib/ratelimit";
 
 const { db, runInvestigatorLoop } = vi.hoisted(() => ({
   db: {
@@ -71,6 +72,7 @@ function post(url: string, body: unknown, headers: Record<string, string> = {}) 
 describe("POST /api/incidents/[id]/investigate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRateLimiter(); // the route rate-limits per org; keep tests independent
     mockDefaults();
   });
 

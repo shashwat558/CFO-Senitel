@@ -39,6 +39,13 @@ export class ForbiddenError extends ServiceError {
   }
 }
 
+export class RateLimitExceededError extends ServiceError {
+  constructor(message = "too many requests", readonly retryAfterSec = 60) {
+    super("RATE_LIMITED", message, 429);
+    this.name = "RateLimitExceededError";
+  }
+}
+
 export class MissingOrgError extends ServiceError {
   constructor() {
     super("NO_ORG", "no organization found — run `npx prisma db seed` first", 503);

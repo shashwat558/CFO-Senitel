@@ -26,7 +26,8 @@ import { createInvestigatorClient } from "@/lib/ai/investigator-client";
 import { runInvestigatorLoop, type LoopStatus } from "@/lib/agent/investigator-loop";
 import { getIncident } from "@/lib/services/incidents";
 import { getSession } from "@/lib/auth/session";
-import { ConflictError, toStatus, ValidationError } from "@/lib/services/errors";
+import { ConflictError, RateLimitExceededError, toStatus, ValidationError } from "@/lib/services/errors";
+import { checkRateLimit } from "@/lib/ratelimit";
 import { investigateIncidentSchema } from "@/lib/validation/investigate";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +80,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const actorId = session.user.id;
     // Org isolation: the incident must belong to this org (404 otherwise).
     await getIncident(prisma, orgId, params.id);
+
+    // Rate limit investigations PER ORG (default 10 req/min, sliding window).
+    // The LLM loop is the expensive path, so we reject before starting it.
+    // Env-overridable: RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS.
+    const limit = checkRateLimit(`investigate:${orgId}`);
+    if (!limit.allowed) {
+      throw new RateLimitExceededError(
+        `investigation rate limit exceeded — try again in ${Math.max(1, Math.ceil((limit.resetAtMs - Date.now()) / 1000))}s`
+      );
+    }
 
     const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const parsed = investigateIncidentSchema.safeParse(raw);
@@ -161,9 +172,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       { status: LOOP_STATUS_HTTP[effectiveStatus] }
     );
   } catch (e) {
+    const headers = new Headers();
+    if (e instanceof RateLimitExceededError) {
+      headers.set("Retry-After", String(e.retryAfterSec));
+    }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "investigation failed" },
-      { status: toStatus(e, 500) }
+      { status: toStatus(e, 500), headers }
     );
   } finally {
     clearTimeout(timer);

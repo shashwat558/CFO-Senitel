@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "dodopayments": "^2.49.0",
     "next": "14.2.18",
     "openai": "4.67.3",
     "react": "18.3.1",

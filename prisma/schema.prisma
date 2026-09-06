@@ -163,6 +163,7 @@ model Organization {
   bankTransactions BankTransaction[]
   budgets        Budget[]
   forecasts      Forecast[]
+  syncRuns       SyncRun[]
   incidents      FinancialIncident[]
   agentRuns      AgentRun[]
   approvals      Approval[]
@@ -665,4 +666,33 @@ model AuditLog {
   @@index([orgId])
   @@index([action])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------- connectors
+// Sync ledger for real finance apps (Dodo first). One row per pull: the
+// cursor watermark drives the next incremental pull, counts/error make
+// silent sync death visible. Staged provider rows land in C2; this slice
+// only records that a sync happened.
+
+enum SyncRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model SyncRun {
+  id        String       @id @default(cuid())
+  orgId     String
+  provider  String       @default("dodo")
+  status    SyncRunStatus @default(RUNNING)
+  cursor    DateTime?
+  counts    Json         @default("{}")
+  error     String?
+  startedAt DateTime     @default(now())
+  finishedAt DateTime?
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([orgId, provider])
 }

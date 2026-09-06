@@ -464,20 +464,24 @@ model IncidentAction {
 }
 
 model AgentRun {
-  id         String         @id @default(cuid())
-  orgId      String
-  incidentId String?
-  status     AgentRunStatus @default(RUNNING)
-  input      Json           @default("{}")
-  output     Json?
-  modelName  String?
-  startedAt  DateTime       @default(now())
-  finishedAt DateTime?
+  id             String         @id @default(cuid())
+  orgId          String
+  incidentId     String?
+  // Client-supplied idempotency token; unique per org so the same
+  // investigation request can be replayed safely without re-running the loop.
+  idempotencyKey String?
+  status         AgentRunStatus @default(RUNNING)
+  input          Json           @default("{}")
+  output         Json?
+  modelName      String?
+  startedAt      DateTime       @default(now())
+  finishedAt     DateTime?
 
   org      Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
   incident FinancialIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
   steps    AgentStep[]
 
+  @@unique([orgId, idempotencyKey])
   @@index([orgId])
   @@index([incidentId])
 }

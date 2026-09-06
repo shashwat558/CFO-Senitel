@@ -1,5 +1,7 @@
 // Route-level tests for the incident agent APIs:
-//   POST /api/incidents/[id]/investigate  (Zod validation + LoopStatus → 200)
+//   POST /api/incidents/[id]/investigate  (Zod validation + concurrency guard +
+//                                          Idempotency-Key replay + distinct
+//                                          outcome codes)
 //   GET  /api/incidents/[id]/runs
 //   GET  /api/incidents/[id]/runs/[runId]/steps
 //
@@ -8,12 +10,17 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import type { LoopStatus } from "../lib/agent/investigator-loop";
 
 const { db, runInvestigatorLoop } = vi.hoisted(() => ({
   db: {
     organization: { findUnique: vi.fn(), findFirst: vi.fn() },
     financialIncident: { findFirst: vi.fn() },
-    agentRun: { findMany: vi.fn(), findFirst: vi.fn() },
+    agentRun: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      count: vi.fn().mockResolvedValue(0),
+    },
     agentStep: { findMany: vi.fn() },
   },
   runInvestigatorLoop: vi.fn(),
@@ -33,13 +40,16 @@ const baseUrl = "http://localhost/api/incidents/incident_gm_aug2024";
 function mockOrgAndIncident() {
   db.organization.findUnique.mockResolvedValue(ORG);
   db.financialIncident.findFirst.mockResolvedValue(INCIDENT);
+  // Defaults: no prior idempotency-key run, no RUNNING investigation in flight.
+  db.agentRun.findFirst.mockResolvedValue(null);
+  db.agentRun.count.mockResolvedValue(0);
 }
 
-function post(url: string, body: unknown) {
+function post(url: string, body: unknown, headers: Record<string, string> = {}) {
   return investigatePost(
     new NextRequest(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...headers },
       body: typeof body === "string" ? body : JSON.stringify(body),
     }),
     { params: { id: "incident_gm_aug2024" } }
@@ -101,18 +111,153 @@ describe("POST /api/incidents/[id]/investigate", () => {
     expect(arg.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("defaults optional fields and maps every LoopStatus to HTTP 200", async () => {
-    for (const status of ["MAX_ITERATIONS", "FAILED", "CANCELLED"]) {
+  it("maps distinct loop outcomes to distinct HTTP codes", async () => {
+    const cases: Array<[LoopStatus, number]> = [
+      ["COMPLETED", 200],
+      ["MAX_ITERATIONS", 200],
+      ["FAILED", 500],
+      ["CANCELLED", 499],
+    ];
+    for (const [status, http] of cases) {
       runInvestigatorLoop.mockResolvedValue({ status, runId: "run_xyz" });
       const res = await post(baseUrl, { question: "Why did gross margin fall in August?" });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(http);
       await expect(res.json()).resolves.toEqual({ status, runId: "run_xyz" });
-      const arg = runInvestigatorLoop.mock.calls[0][0] as Record<string, unknown>;
-      // optional fields omitted → defaults (loop applies maxIterations = 8)
-      expect(arg.maxIterations).toBeUndefined();
-      expect(arg.actorId).toBeUndefined();
-      expect(arg.toolCtx).toEqual({ db, orgId: ORG.id });
     }
+    // optional body fields omitted → not passed (loop applies its defaults:
+    // maxIterations = 8, maxLlmRetries = 2)
+    const arg = runInvestigatorLoop.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.maxIterations).toBeUndefined();
+    expect(arg.maxLlmRetries).toBeUndefined();
+    expect(arg.actorId).toBeUndefined();
+    expect(arg.toolCtx).toEqual({ db, orgId: ORG.id });
+  });
+
+  it("passes cost caps (maxIterations, maxLlmRetries) through to the loop", async () => {
+    runInvestigatorLoop.mockResolvedValue({ status: "COMPLETED", runId: "run_caps" });
+    const res = await post(baseUrl, {
+      question: "Why did gross margin fall in August?",
+      maxIterations: 3,
+      maxLlmRetries: 0,
+    });
+    expect(res.status).toBe(200);
+    const arg = runInvestigatorLoop.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.maxIterations).toBe(3);
+    expect(arg.maxLlmRetries).toBe(0);
+  });
+
+  it("rejects out-of-range maxLlmRetries with 400 before touching the loop", async () => {
+    for (const maxLlmRetries of [-1, 6, 1.5]) {
+      const res = await post(baseUrl, { question: "Why did margin fall?", maxLlmRetries });
+      expect(res.status).toBe(400);
+      expect(runInvestigatorLoop).not.toHaveBeenCalled();
+    }
+  });
+
+  it("returns 409 while another investigation for the incident is RUNNING", async () => {
+    db.agentRun.count.mockResolvedValue(1);
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("already running") });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+    expect(db.agentRun.count).toHaveBeenCalledWith({
+      where: { orgId: ORG.id, incidentId: INCIDENT.id, status: "RUNNING" },
+    });
+  });
+
+  it("replays a COMPLETED run when Idempotency-Key matches (loop not re-run)", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_old",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "COMPLETED",
+      output: {},
+    });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ status: "COMPLETED", runId: "run_old" });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+    expect(db.agentRun.count).not.toHaveBeenCalled();
+    expect(db.agentRun.findFirst).toHaveBeenCalledWith({
+      where: { orgId: ORG.id, idempotencyKey: "key-123" },
+    });
+  });
+
+  it("replays a MAX_ITERATIONS run (COMPLETED row with stopped=MAX_ITERATIONS) as MAX_ITERATIONS", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_old",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "COMPLETED",
+      output: { stopped: "MAX_ITERATIONS" },
+    });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ status: "MAX_ITERATIONS", runId: "run_old" });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+  });
+
+  it("replays a FAILED run as 500 (still idempotent — no new loop)", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_failed",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "FAILED",
+      output: { error: "boom" },
+    });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ status: "FAILED", runId: "run_failed" });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the Idempotency-Key run is still RUNNING", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_inflight",
+      orgId: ORG.id,
+      incidentId: INCIDENT.id,
+      status: "RUNNING",
+      output: null,
+    });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("already running") });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when a key is reused for a different incident", async () => {
+    db.agentRun.findFirst.mockResolvedValue({
+      id: "run_other",
+      orgId: ORG.id,
+      incidentId: "incident_other",
+      status: "COMPLETED",
+      output: {},
+    });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("different incident") });
+    expect(runInvestigatorLoop).not.toHaveBeenCalled();
+  });
+
+  it("maps a same-key DB unique violation (P2002) to 409 instead of 500", async () => {
+    runInvestigatorLoop.mockRejectedValue({ code: "P2002", message: "Unique constraint failed on the fields: (`orgId`,`idempotencyKey`)" });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "Idempotency-Key": "key-123" });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("idempotency key") });
+  });
+
+  it("re-throws non-unique loop failures with their service status", async () => {
+    runInvestigatorLoop.mockRejectedValue(new TypeError("llm exploded"));
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" });
+    expect(res.status).toBe(500);
+  });
+
+  it("passes the Idempotency-Key through to a fresh loop run", async () => {
+    runInvestigatorLoop.mockResolvedValue({ status: "COMPLETED", runId: "run_new" });
+    const res = await post(baseUrl, { question: "Why did gross margin fall in August?" }, { "idempotency-key": "key-456" });
+    expect(res.status).toBe(200);
+    const arg = runInvestigatorLoop.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.idempotencyKey).toBe("key-456");
   });
 
   it("surfaces loop-internal setup errors with service status (e.g. missing org → 503)", async () => {

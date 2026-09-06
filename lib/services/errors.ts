@@ -25,6 +25,13 @@ export class ValidationError extends ServiceError {
   }
 }
 
+export class ConflictError extends ServiceError {
+  constructor(message: string) {
+    super("CONFLICT", message, 409);
+    this.name = "ConflictError";
+  }
+}
+
 export class MissingOrgError extends ServiceError {
   constructor() {
     super("NO_ORG", "no organization found — run `npx prisma db seed` first", 503);

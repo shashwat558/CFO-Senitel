@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useToast } from "@/components/Toasts";
 
 export interface EvidenceItem {
@@ -11,6 +11,14 @@ export interface EvidenceItem {
   output: unknown;
   summary: string;
   occurredAt: string;
+  sourceType?: string | null;
+  sourceId?: string | null;
+}
+
+interface ExpandedSource {
+  kind?: string;
+  row?: unknown;
+  reason?: string;
 }
 
 function JsonBlock({ value }: { value: unknown }) {
@@ -24,10 +32,35 @@ function JsonBlock({ value }: { value: unknown }) {
   return <pre className="json-block">{text}</pre>;
 }
 
-export function EvidenceInspector({ evidence }: { evidence: EvidenceItem[] }) {
+export function EvidenceInspector({ evidence, incidentId }: { evidence: EvidenceItem[]; incidentId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(evidence[0]?.id ?? null);
+  const [source, setSource] = useState<ExpandedSource | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(false);
   const { push } = useToast();
   const selected = evidence.find((e) => e.id === selectedId) ?? null;
+
+  // Resolve lineage on selection: CLAIM → EVIDENCE → SOURCE row (or reason).
+  useEffect(() => {
+    setSource(null);
+    if (!selected || !selected.sourceType || !selected.sourceId) return;
+    let cancelled = false;
+    setSourceLoading(true);
+    fetch(`/api/incidents/${incidentId}/evidence/${selected.id}?expand=source`)
+      .then(async (r) => {
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error ?? "failed");
+        if (!cancelled) setSource((j.source ?? null) as ExpandedSource | null);
+      })
+      .catch((e) => {
+        if (!cancelled) push(e instanceof Error ? e.message : "lineage failed", "error");
+      })
+      .finally(() => {
+        if (!cancelled) setSourceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.id, incidentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (evidence.length === 0) {
     return (
@@ -75,6 +108,26 @@ export function EvidenceInspector({ evidence }: { evidence: EvidenceItem[] }) {
               OCCURRED AT: {new Date(selected.occurredAt).toLocaleString()}
             </div>
             <p style={{ color: "var(--lp-fg-muted)", lineHeight: 1.6 }}>{selected.summary || "—"}</p>
+            <div className="muted" style={{ fontSize: 10, letterSpacing: "0.1em", marginTop: 12 }}>LINEAGE // SOURCE RECORD</div>
+            {!selected.sourceType || !selected.sourceId ? (
+              <p className="muted font-mono" style={{ fontSize: 11 }}>
+                No source linkage recorded for this trace (tool-level evidence only).
+              </p>
+            ) : sourceLoading ? (
+              <p className="muted font-mono" style={{ fontSize: 11 }}>RESOLVING SOURCE RECORD…</p>
+            ) : source?.row ? (
+              <div>
+                <div style={{ marginBottom: 6 }}>
+                  <code className="inline">{source.kind}</code>{" "}
+                  <span className="muted" style={{ fontSize: 11 }}>{selected.sourceId}</span>
+                </div>
+                <JsonBlock value={source.row} />
+              </div>
+            ) : (
+              <p className="muted font-mono" style={{ fontSize: 11 }}>
+                {selected.sourceType} // {selected.sourceId} — {source?.reason ?? "source row not found in this org (never fabricated)"}
+              </p>
+            )}
             <div className="muted" style={{ fontSize: 10, letterSpacing: "0.1em", marginTop: 12 }}>TOOL INPUT</div>
             <JsonBlock value={selected.input} />
             <div className="muted" style={{ fontSize: 10, letterSpacing: "0.1em", marginTop: 12 }}>TOOL OUTPUT</div>

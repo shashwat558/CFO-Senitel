@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { KpiCard } from "@/components/KpiCard";
 import { TrendChart, VendorBarChart } from "@/components/TrendChart";
+import { CashPanel } from "@/components/CashPanel";
+import { SyncPanel } from "@/components/SyncPanel";
 import { fmtPct, fmtPP, fmtSignedUSD, fmtUSD } from "@/lib/format";
 import { useToast } from "@/components/Toasts";
 
@@ -197,6 +199,14 @@ export default function DashboardPage() {
 
       {/* Top Vendors Chart */}
       <VendorBarChart vendors={data.topVendors} total={data.totalSpendLatestMonth} />
+
+      {/* Cash forecast + aging (B6 tools surface) */}
+      <div style={{ marginTop: 32 }}>
+        <CashPanel />
+      </div>
+
+      {/* Connector sync ledger */}
+      <SyncPanel />
     </>
   );
 }

@@ -3,7 +3,19 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EvidenceInspector } from "@/components/EvidenceInspector";
+import { StreamStatusChip, useRunStream } from "@/components/LiveTimeline";
 import { useToast } from "@/components/Toasts";
+
+interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  type: string;
+  status: string;
+  payload: Record<string, unknown> | null;
+  simulationResult: unknown;
+  verificationResult: unknown;
+}
 
 interface Detail {
   id: string;
@@ -13,8 +25,8 @@ interface Detail {
   status: string;
   severity: string;
   findings: Array<{ id: string; title: string; confidence: number }>;
-  evidence: Array<{ id: string; findingId: string | null; toolName: string; input: unknown; output: unknown; summary: string; occurredAt: string }>;
-  actions: Array<{ id: string; title: string; status: string }>;
+  evidence: Array<{ id: string; findingId: string | null; toolName: string; input: unknown; output: unknown; summary: string; occurredAt: string; sourceType?: string | null; sourceId?: string | null }>;
+  actions: ActionItem[];
 }
 
 interface Run {
@@ -72,8 +84,10 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { push } = useToast();
+  const wasLiveRef = useRef(false);
+  const [statusTarget, setStatusTarget] = useState("");
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const loadDetail = useCallback(async () => {
     try {
@@ -113,31 +127,49 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
 
   const activeRunId = runs.find((r) => r.status === "RUNNING")?.id ?? null;
 
-  useEffect(() => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    pollingRef.current = null;
+  // Live event stream drives refreshes: every new SSE event id bumps
+  // `revision`, and we re-fetch authoritative REST snapshots from it.
+  // The hook falls back to 2s polling when EventSource is unavailable.
+  const { revision: streamRevision, mode: streamMode } = useRunStream(
+    params.id,
+    activeRunId
+  );
 
+  useEffect(() => {
     if (!activeRunId) {
       setActiveSteps([]);
+      // Polling fallback discovered completion between ticks: refresh once.
+      if (wasLiveRef.current) {
+        wasLiveRef.current = false;
+        loadRuns();
+        loadDetail();
+      }
       return;
     }
-
-    const tick = async () => {
+    let cancelled = false;
+    (async () => {
       await loadRuns();
       const steps = await loadSteps(activeRunId);
-      setActiveSteps(steps);
-    };
-    tick();
-    pollingRef.current = setInterval(tick, 2000);
-
+      if (!cancelled) setActiveSteps(steps);
+    })();
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      cancelled = true;
     };
-  }, [activeRunId, loadRuns, loadSteps]);
+  }, [activeRunId, streamRevision, loadRuns, loadSteps, loadDetail]);
 
   useEffect(() => {
-    if (activeRunId) loadDetail();
-  }, [activeRunId, loadDetail]);
+    if (streamMode === "live" || streamMode === "polling") {
+      wasLiveRef.current = true;
+      return;
+    }
+    // Stream just closed after a live run: final refresh so fresh findings,
+    // evidence, and the COMPLETED run appear without a manual reload.
+    if (streamMode === "closed" && wasLiveRef.current) {
+      wasLiveRef.current = false;
+      loadRuns();
+      loadDetail();
+    }
+  }, [streamMode, loadRuns, loadDetail]);
 
   const startInvestigation = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,8 +203,28 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
     }
   };
 
-  const cancelRun = async (runId: string) => {
-    setActionError(null);
+  const applyStatus = async () => {
+    if (!statusTarget) return;
+    setStatusBusy(true);
+    try {
+      const res = await fetch(`/api/incidents/${params.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: statusTarget }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? "transition failed");
+      push(`Status → ${statusTarget}`, "success");
+      setStatusTarget("");
+      await loadDetail();
+    } catch (err) {
+      push(err instanceof Error ? err.message : "Transition failed.", "error");
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const cancelRun = async (runId: string) => {    setActionError(null);
     try {
       const res = await fetch(`/api/incidents/${params.id}/runs/${runId}/cancel`, { method: "POST" });
       const j = await res.json().catch(() => ({}));
@@ -251,6 +303,35 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
             FINDINGS: {data.findings.length} · EVIDENCE: {data.evidence.length} · ACTIONS: {data.actions.length}
           </span>
         </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          <span className="muted font-mono" style={{ fontSize: "11px", letterSpacing: "0.1em" }}>
+            TRANSITION STATUS:
+          </span>
+          <select
+            className="font-mono"
+            value={statusTarget}
+            onChange={(e) => setStatusTarget(e.target.value)}
+            disabled={statusBusy}
+            aria-label="Next incident status"
+            style={{ fontSize: 11, padding: "6px 10px", border: "1px solid var(--lp-border)", borderRadius: 6, background: "#fff" }}
+          >
+            <option value="">SELECT NEXT STATE…</option>
+            {["OPEN", "INVESTIGATING", "PENDING_APPROVAL", "RESOLVED", "CLOSED"]
+              .filter((s) => s !== data.status)
+              .map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+          </select>
+          <button
+            className="btn-console-enter"
+            style={{ padding: "6px 14px", fontSize: 10 }}
+            disabled={!statusTarget || statusBusy}
+            onClick={applyStatus}
+          >
+            {statusBusy ? "…" : "APPLY"}
+          </button>
+        </div>
       </div>
 
       {/* Summary Dossier Panel */}
@@ -323,7 +404,7 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
               <span className="beacon-dot" style={{ display: "inline-block", marginRight: 8 }} />
               LIVE INVESTIGATION TIMELINE
             </div>
-            <span className="telemetry-chip font-mono">POLLING 2.0s</span>
+            <StreamStatusChip mode={activeRunId ? streamMode : "closed"} />
           </div>
           <Timeline steps={activeSteps} />
         </div>
@@ -415,32 +496,32 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
           <span className="telemetry-chip font-mono">POSTGRES JOURNAL VERIFIED</span>
         </div>
 
-        <EvidenceInspector evidence={data.evidence} />
+        <EvidenceInspector evidence={data.evidence} incidentId={params.id} />
       </div>
 
-      {/* Actions Panel */}
+      {/* Actions Panel — propose → approve → execute → verify */}
       <div className="dossier-panel">
         <div className="dossier-header">
-          <span className="dossier-title">// PROPOSED MITIGATION ACTIONS ({data.actions.length})</span>
-          <span className="telemetry-chip font-mono">GOVERNANCE PIPELINE</span>
+          <span className="dossier-title">// MITIGATION ACTIONS ({data.actions.length})</span>
+          <span className="telemetry-chip font-mono">PROPOSE → APPROVE → EXECUTE → VERIFY</span>
         </div>
 
+        <ProposeActionForm
+          incidentId={params.id}
+          findings={data.findings}
+          onDone={loadDetail}
+        />
+
         {data.actions.length === 0 ? (
-          <p className="font-mono muted" style={{ fontSize: "12px" }}>
-            No mitigation actions queued. Recommended actions and approvals dispatch via Phase 3 governance.
+          <p className="font-mono muted" style={{ fontSize: "12px", marginTop: 12 }}>
+            No mitigation actions queued yet. Propose one from a finding above.
           </p>
         ) : (
-          data.actions.map((a) => (
-            <div key={a.id} className="action-card font-mono">
-              <div>
-                <strong>{a.title}</strong>
-                <div className="muted" style={{ fontSize: "11px", marginTop: 4 }}>
-                  ACTION ID: {a.id}
-                </div>
-              </div>
-              <span className={`badge-tag ${a.status.toLowerCase()}`}>{a.status}</span>
-            </div>
-          ))
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+            {data.actions.map((a) => (
+              <ActionCard key={a.id} incidentId={params.id} action={a} onChanged={loadDetail} />
+            ))}
+          </div>
         )}
       </div>
     </>
@@ -471,8 +552,7 @@ function RunDetail({ runId, incidentId }: { runId: string; incidentId: string })
   );
 }
 
-function Timeline({ steps }: { steps: Step[] }) {
-  return (
+function Timeline({ steps }: { steps: Step[] }) {  return (
     <ol className="timeline">
       {steps.map((s) => (
         <TimelineStep key={s.id} step={s} />
@@ -600,5 +680,227 @@ function TimelineStep({ step }: { step: Step }) {
         </div>
       ) : null}
     </li>
+  );
+}
+
+const ACTION_TYPES = ["RECOMMENDATION", "VENDOR_DISPUTE", "PAYMENT_HOLD", "FORECAST_UPDATE", "JOURNAL_DRAFT"];
+const VERIFY_TOOLS = ["", "getPnl", "compareVendorPrices"];
+
+function ProposeActionForm({
+  incidentId,
+  findings,
+  onDone,
+}: {
+  incidentId: string;
+  findings: Array<{ id: string; title: string }>;
+  onDone: () => void;
+}) {
+  const { push } = useToast();
+  const [findingId, setFindingId] = useState(findings[0]?.id ?? "");
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState("RECOMMENDATION");
+  const [description, setDescription] = useState("");
+  const [verifyTool, setVerifyTool] = useState("");
+  const [verifyInput, setVerifyInput] = useState("");
+  const [verifyExpected, setVerifyExpected] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!findingId && findings[0]) setFindingId(findings[0].id);
+  }, [findings, findingId]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!findingId) {
+      push("Select a finding first — run an investigation if none exist.", "error");
+      return;
+    }
+    if (title.trim().length < 3) {
+      push("Title must be at least 3 characters.", "error");
+      return;
+    }
+    let payload: Record<string, unknown> = {};
+    if (verifyTool) {
+      try {
+        payload = {
+          verification: {
+            toolName: verifyTool,
+            input: verifyInput.trim() ? JSON.parse(verifyInput) : {},
+            expected: verifyExpected.trim() ? JSON.parse(verifyExpected) : {},
+          },
+        };
+      } catch {
+        push("Verification input/expected must be valid JSON.", "error");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/incidents/${incidentId}/actions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ findingId, title: title.trim(), type, description, payload }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? "propose failed");
+      push("Action proposed — decide it in the Approvals queue.", "success");
+      setTitle("");
+      setDescription("");
+      setVerifyInput("");
+      setVerifyExpected("");
+      onDone();
+    } catch (err) {
+      push(err instanceof Error ? err.message : "Propose failed.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (findings.length === 0) return null;
+
+  return (
+    <form onSubmit={submit} className="font-mono" style={{ border: "1px solid var(--lp-border)", borderRadius: 8, padding: 16, marginBottom: 4, background: "#fff" }}>
+      <div className="muted" style={{ fontSize: 10, letterSpacing: "0.1em", marginBottom: 10 }}>
+        PROPOSE MITIGATION ACTION // OPENS A PENDING APPROVAL
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <label style={{ fontSize: 11 }}>
+          <span className="muted">FINDING</span>
+          <select value={findingId} onChange={(e) => setFindingId(e.target.value)} style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 12 }}>
+            {findings.map((f) => (
+              <option key={f.id} value={f.id}>{f.title.slice(0, 60)}</option>
+            ))}
+          </select>
+        </label>
+        <label style={{ fontSize: 11 }}>
+          <span className="muted">ACTION TYPE</span>
+          <select value={type} onChange={(e) => setType(e.target.value)} style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 12 }}>
+            {ACTION_TYPES.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <label style={{ fontSize: 11, display: "block", marginTop: 10 }}>
+        <span className="muted">TITLE</span>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="e.g. Place Apex Steel payments on hold"
+          style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 12 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, display: "block", marginTop: 10 }}>
+        <span className="muted">RATIONALE</span>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={2}
+          placeholder="Why is this recommended? Cite the evidence."
+          style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 12 }}
+        />
+      </label>
+      <label style={{ fontSize: 11, display: "block", marginTop: 10 }}>
+        <span className="muted">VERIFY WITH TOOL (OPTIONAL — POWERS POST-EXECUTION VERIFICATION)</span>
+        <select value={verifyTool} onChange={(e) => setVerifyTool(e.target.value)} style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 12 }}>
+          {VERIFY_TOOLS.map((t) => (
+            <option key={t} value={t}>{t === "" ? "NONE — VERIFY WILL REPORT HONESTLY" : t}</option>
+          ))}
+        </select>
+      </label>
+      {verifyTool ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+          <label style={{ fontSize: 11 }}>
+            <span className="muted">TOOL INPUT (JSON, MUST INCLUDE orgId)</span>
+            <textarea value={verifyInput} onChange={(e) => setVerifyInput(e.target.value)} rows={3} placeholder='{"orgId": "...", "year": 2024, "month": 8}' style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 11, fontFamily: "monospace" }} />
+          </label>
+          <label style={{ fontSize: 11 }}>
+            <span className="muted">CLAIMED FIGURES (JSON SUBSET)</span>
+            <textarea value={verifyExpected} onChange={(e) => setVerifyExpected(e.target.value)} rows={3} placeholder='{"revenue": 1200000}' style={{ display: "block", width: "100%", marginTop: 4, padding: "6px 8px", fontSize: 11, fontFamily: "monospace" }} />
+          </label>
+        </div>
+      ) : null}
+      <button type="submit" className="btn-console-enter" style={{ marginTop: 12, padding: "8px 18px", fontSize: 11 }} disabled={busy}>
+        {busy ? "PROPOSING…" : "PROPOSE ACTION →"}
+      </button>
+    </form>
+  );
+}
+
+function ActionCard({
+  incidentId,
+  action,
+  onChanged,
+}: {
+  incidentId: string;
+  action: ActionItem;
+  onChanged: () => void;
+}) {
+  const { push } = useToast();
+  const [busy, setBusy] = useState<"execute" | "verify" | null>(null);
+
+  const run = async (verb: "execute" | "verify") => {
+    setBusy(verb);
+    try {
+      const res = await fetch(`/api/incidents/${incidentId}/actions/${action.id}/${verb}`, { method: "POST" });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? `${verb} failed`);
+      push(`Action ${verb}d — ${j.action?.status ?? j.result?.verified ? "verified" : "recorded"}`, "success");
+      onChanged();
+    } catch (err) {
+      push(err instanceof Error ? err.message : `${verb} failed.`, "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const payload = action.payload ?? {};
+  const findingId = typeof payload.findingId === "string" ? payload.findingId : null;
+  const verification = (payload.verification ?? null) as { toolName?: string } | null;
+  const sim = action.simulationResult as { summary?: string } | null;
+  const ver = action.verificationResult as { verified?: boolean; detail?: string; checkedAt?: string } | null;
+
+  return (
+    <div className="action-card font-mono">
+      <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <strong>{action.title}</strong>
+          <span className={`badge-tag ${action.status.toLowerCase()}`}>{action.status}</span>
+          <span className="muted" style={{ fontSize: 10 }}>{action.type}</span>
+        </div>
+        {action.description ? (
+          <p className="muted" style={{ fontSize: 11, margin: "6px 0 0", lineHeight: 1.6 }}>{action.description}</p>
+        ) : null}
+        <div className="muted" style={{ fontSize: 10, marginTop: 6 }}>
+          ACTION ID: {action.id}
+          {findingId ? <> · FINDING: <a href={`#finding-${findingId}`}>{findingId.slice(0, 12)}…</a></> : null}
+          {verification?.toolName ? <> · VERIFY VIA: <code className="inline">{verification.toolName}</code></> : null}
+        </div>
+        {sim?.summary ? (
+          <p style={{ fontSize: 11, margin: "6px 0 0", color: "var(--lp-fg-muted)" }}>SIMULATION: {sim.summary}</p>
+        ) : null}
+        {ver ? (
+          <p style={{ fontSize: 11, margin: "6px 0 0", color: ver.verified ? "var(--lp-green)" : "var(--lp-amber)" }}>
+            VERIFICATION {ver.verified ? "✓ PASSED" : "✕ FAILED"}: {ver.detail} {ver.checkedAt ? `· ${new Date(ver.checkedAt).toLocaleString()}` : ""}
+          </p>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {action.status === "PROPOSED" ? (
+          <Link href="/approvals" className="muted" style={{ fontSize: 10 }}>DECIDE IN QUEUE &rarr;</Link>
+        ) : null}
+        {action.status === "APPROVED" ? (
+          <button className="btn-console-enter" style={{ padding: "6px 14px", fontSize: 10 }} disabled={busy !== null} onClick={() => run("execute")}>
+            {busy === "execute" ? "…" : "EXECUTE"}
+          </button>
+        ) : null}
+        {action.status === "EXECUTED" ? (
+          <button className="btn-console-enter" style={{ padding: "6px 14px", fontSize: 10 }} disabled={busy !== null} onClick={() => run("verify")}>
+            {busy === "verify" ? "…" : "VERIFY"}
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }

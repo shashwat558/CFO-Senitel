@@ -169,6 +169,7 @@ model User {
   decidedApprovals   Approval[]       @relation("DecidedBy")
   auditLogs          AuditLog[]
   createdIncidents   FinancialIncident[] @relation("CreatedBy")
+  assignedIncidents  FinancialIncident[] @relation("AssignedTo")
 
   @@unique([orgId, email])
   @@index([orgId])
@@ -397,11 +398,13 @@ model FinancialIncident {
   detectedAt  DateTime       @default(now())
   resolvedAt  DateTime?
   createdById String?
+  assignedToId String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
   org        Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
   createdBy  User?              @relation("CreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedTo User?              @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
   findings   IncidentFinding[]
   evidence   IncidentEvidence[]
   actions    IncidentAction[]
@@ -411,6 +414,7 @@ model FinancialIncident {
   @@index([orgId])
   @@index([orgId, status])
   @@index([orgId, type])
+  @@index([assignedToId])
 }
 
 model IncidentFinding {
@@ -454,6 +458,7 @@ model IncidentAction {
   payload          Json         @default("{}")
   status           ActionStatus @default(PROPOSED)
   simulationResult Json?
+  verificationResult Json?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 

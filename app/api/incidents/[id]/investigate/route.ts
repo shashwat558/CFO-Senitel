@@ -24,6 +24,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { createInvestigatorClient } from "@/lib/ai/investigator-client";
 import { runInvestigatorLoop, type LoopStatus } from "@/lib/agent/investigator-loop";
+import { toLoopStatus } from "@/lib/agent/runEvents";
 import { getIncident } from "@/lib/services/incidents";
 import { getSession } from "@/lib/auth/session";
 import { ConflictError, RateLimitExceededError, toStatus, ValidationError } from "@/lib/services/errors";
@@ -50,16 +51,9 @@ const LOOP_STATUS_HTTP: Record<LoopStatus, number> = {
   CANCELLED: 499,
 };
 
-/** Persisted AgentRunStatus → LoopStatus. COMPLETED rows that stopped early
- *  because the agent exhausted maxIterations surface as MAX_ITERATIONS. */
+/** Persisted AgentRunStatus → LoopStatus (shared with the SSE stream). */
 function persistedToLoopStatus(run: { status: string; output: unknown }): LoopStatus {
-  if (run.status === "COMPLETED") {
-    const stopped = (run.output as { stopped?: unknown } | null)?.stopped;
-    return stopped === "MAX_ITERATIONS" ? "MAX_ITERATIONS" : "COMPLETED";
-  }
-  if (run.status === "FAILED") return "FAILED";
-  if (run.status === "CANCELLED") return "CANCELLED";
-  return "FAILED"; // RUNNING is handled by the caller before this is reached
+  return toLoopStatus(run.status, run.output);
 }
 
 /** Prisma P2002 = unique constraint violation (AgentRun orgId+idempotencyKey

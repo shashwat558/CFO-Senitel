@@ -73,6 +73,18 @@ Exceeding the limit returns `429` with a `Retry-After` header. The limiter is
 in-process (good for the single-instance Docker deploy); swap `lib/ratelimit.ts`
 for a shared store if you scale horizontally.
 
+## Run event stream (SSE)
+
+`GET /api/incidents/[id]/runs/[runId]/stream` replays a run as Server-Sent
+Events (`agent_started → agent_step → tool_started/tool_completed →
+evidence_added → agent_finished`), projected deterministically from persisted
+`AgentRun`/`AgentStep`/`IncidentEvidence` rows (`lib/agent/runEvents.ts`).
+`?follow=1` (default) holds the stream while the run is `RUNNING`, polling and
+emitting only new ids; `?follow=0` sends one snapshot. `?cursor=<lastId>`
+resumes after a reconnect; `pollMs` (250–5000) and `maxWaitMs` (≤600000) bound
+a forgotten tab. Evidence attribution is approximate: rows carry no run id, so
+incident evidence at/after run start is attributed to the run.
+
 ## Architecture
 
 ```

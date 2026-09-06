@@ -150,9 +150,11 @@ async function main() {
         },
       });
 
+      // Every AuditLog row carries an actor; the seed's system action is
+      // attributed to the org's default user (Maya Chen, the v1 session user).
       await tx.auditLog.create({
         data: {
-          orgId: ORG.id, actorId: null, action: "db.seed",
+          orgId: ORG.id, actorId: cfo.id, action: "db.seed",
           entityType: "Organization", entityId: ORG.id,
           metadata: {
             invoices: ds.invoices.length,

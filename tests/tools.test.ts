@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { executeTool, TOOL_NAMES } from "../lib/tools/registry";
-import { aggregatePnl } from "../lib/financial/pnl";
+import { aggregatePnl, fetchMonthlyPnl } from "../lib/financial/pnl";
 
 const REV = { id: "acct_4000", code: "4000", name: "Revenue", type: "REVENUE" };
 const COGS = { id: "acct_5000", code: "5000", name: "COGS — Materials", type: "COGS" };
@@ -169,5 +169,21 @@ describe("financial tools (mocked Prisma — deterministic)", () => {
     const a = aggregatePnl("o", new Date("2024-08-01T00:00:00Z"), new Date("2024-09-01T00:00:00Z"), lines);
     const b = aggregatePnl("o", new Date("2024-08-01T00:00:00Z"), new Date("2024-09-01T00:00:00Z"), [...lines].reverse());
     expect(a).toEqual(b);
+  });
+
+  it("regression: fetchMonthlyPnl excludes DRAFT entries — queries only POSTED journal entries", async () => {
+    // JournalStatus defaults to DRAFT; the P&L must never leak draft balances.
+    // fetchPnl carries the exclusion in the Prisma where clause.
+    const tx = { findMany: vi.fn().mockResolvedValue([]) };
+    const db = { ...mockDb(), transaction: tx } as unknown as PrismaClient;
+    await fetchMonthlyPnl(db, "org_acme_industries", 2024, 8);
+    expect(tx.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          journalEntry: { status: "POSTED" },
+          account: { type: { in: ["REVENUE", "COGS", "EXPENSE"] } },
+        }),
+      })
+    );
   });
 });

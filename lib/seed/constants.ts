@@ -16,6 +16,14 @@ export const USERS = [
   { id: "user_priya_nair", email: "priya.nair@acme.example", name: "Priya Nair", role: "VIEWER" as const },
 ];
 
+/**
+ * The org's default user — the v1 session stub (lib/auth/session.ts) resolves
+ * to this actor, and session.user.orgId is the tenant every route/service/
+ * tool query is scoped to. Migrating the seed org to a default user lets
+ * routes stop looking up the org by slug.
+ */
+export const DEFAULT_USER = USERS[0];
+
 export interface VendorSpec {
   code: string;
   name: string;

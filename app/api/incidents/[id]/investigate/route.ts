@@ -1,7 +1,7 @@
 // POST /api/incidents/[id]/investigate — run the Investigator Agent loop for
 // an incident, synchronously, and report the persistent run.
 //
-//   getDefaultOrg → (org-scoped incident check) → idempotent replay → concurrency guard
+//   getSession → (org-scoped incident check) → idempotent replay → concurrency guard
 //                 → runInvestigatorLoop
 //
 // Semantics:
@@ -25,7 +25,7 @@ import { prisma } from "@/lib/db/prisma";
 import { createInvestigatorClient } from "@/lib/ai/investigator-client";
 import { runInvestigatorLoop, type LoopStatus } from "@/lib/agent/investigator-loop";
 import { getIncident } from "@/lib/services/incidents";
-import { getDefaultOrg } from "@/lib/services/org";
+import { getSession } from "@/lib/auth/session";
 import { ConflictError, toStatus, ValidationError } from "@/lib/services/errors";
 import { investigateIncidentSchema } from "@/lib/validation/investigate";
 
@@ -73,24 +73,26 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   // Abort the loop when the whole-run budget expires OR the client disconnects.
   const signal = AbortSignal.any([controller.signal, req.signal]);
   try {
-    // Single-tenant Phase-1: investigate inside the default org.
-    const org = await getDefaultOrg(prisma);
+    // Tenant + actor come from the session: investigate inside session.user.orgId.
+    const session = await getSession(prisma);
+    const orgId = session.user.orgId;
+    const actorId = session.user.id;
     // Org isolation: the incident must belong to this org (404 otherwise).
-    await getIncident(prisma, org.id, params.id);
+    await getIncident(prisma, orgId, params.id);
 
     const raw = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const parsed = investigateIncidentSchema.safeParse(raw);
     if (!parsed.success) {
       throw new ValidationError(`invalid investigation request: ${parsed.error.message}`);
     }
-    const { question, maxIterations, maxLlmRetries, actorId } = parsed.data;
+    const { question, maxIterations, maxLlmRetries } = parsed.data;
     const idempotencyKey = req.headers.get("idempotency-key")?.trim() || undefined;
 
     // Idempotent replay: an existing run for this key is returned as-is — the
     // loop is NOT re-run. Reusing a key for a different incident is a conflict.
     if (idempotencyKey) {
       const prior = await prisma.agentRun.findFirst({
-        where: { orgId: org.id, idempotencyKey },
+        where: { orgId, idempotencyKey },
       });
       if (prior) {
         if (prior.incidentId !== params.id) {
@@ -109,7 +111,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     // Concurrency guard: only one RUNNING investigation per incident.
     const running = await prisma.agentRun.count({
-      where: { orgId: org.id, incidentId: params.id, status: "RUNNING" },
+      where: { orgId, incidentId: params.id, status: "RUNNING" },
     });
     if (running > 0) {
       throw new ConflictError("an investigation for this incident is already running");
@@ -120,8 +122,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       result = await runInvestigatorLoop({
         db: prisma,
         llm: createInvestigatorClient(),
-        toolCtx: { db: prisma, orgId: org.id, actorId },
-        orgId: org.id,
+        toolCtx: { db: prisma, orgId, actorId },
+        orgId,
         incidentId: params.id,
         question,
         maxIterations,

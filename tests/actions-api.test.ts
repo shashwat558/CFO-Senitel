@@ -9,7 +9,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import type { PrismaClient } from "@prisma/client";
-import { executeAction } from "../lib/services/actions";
+import { executeAction, type ActionActor } from "../lib/services/actions";
+import { decideApproval } from "../lib/services/approvals";
 import { proposedActionSchema } from "../lib/actions/types";
 import { approvalDecisionSchema, approveRejectSchema } from "../lib/approvals/types";
 
@@ -110,7 +111,7 @@ describe("POST /api/incidents/[id]/actions", () => {
     mockDefaults();
   });
 
-  it("creates a PROPOSED action + PENDING approval and audits with actor null", async () => {
+  it("creates a PROPOSED action + PENDING approval and audits with the session actor", async () => {
     const res = await propose({
       findingId: FINDING.id,
       title: "Claw back Apex overcharge",
@@ -141,10 +142,15 @@ describe("POST /api/incidents/[id]/actions", () => {
         status: "PENDING",
       },
     });
+    // the session user requests the approval and is the audit actor
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: USER_CFO.id, orgId: ORG.id },
+      select: { id: true },
+    });
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orgId: ORG.id,
-        actorId: null,
+        actorId: USER_CFO.id,
         action: "action.propose",
         entityType: "IncidentAction",
         entityId: ACTION.id,
@@ -190,7 +196,7 @@ describe("POST /api/approvals/[id]/approve", () => {
     mockDefaults();
   });
 
-  it("transitions approval PENDING→APPROVED and action PROPOSED→APPROVED, audits actor null", async () => {
+  it("transitions approval PENDING→APPROVED and action PROPOSED→APPROVED, records the session CFO as decider + actor", async () => {
     const res = await approve({ reason: "Matches vendor contract analysis" });
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
@@ -202,7 +208,7 @@ describe("POST /api/approvals/[id]/approve", () => {
       where: { id: APPROVAL.id },
       data: expect.objectContaining({
         status: "APPROVED",
-        decidedById: null,
+        decidedById: USER_CFO.id,
         decidedAt: expect.any(Date),
         reason: "Matches vendor contract analysis",
       }),
@@ -214,7 +220,7 @@ describe("POST /api/approvals/[id]/approve", () => {
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         orgId: ORG.id,
-        actorId: null,
+        actorId: USER_CFO.id,
         action: "approval.approve",
         entityType: "Approval",
         entityId: APPROVAL.id,
@@ -222,32 +228,47 @@ describe("POST /api/approvals/[id]/approve", () => {
     });
   });
 
-  it("role-check stub: rejects a VIEWER decider with 403 before any update", async () => {
+  it("enforces the CFO/CONTROLLER role gate: a VIEWER session cannot approve (403)", async () => {
+    // Session stub resolves to the VIEWER (no auth yet → deterministic stub).
     db.user.findFirst.mockResolvedValue(USER_VIEWER);
-    const res = await approve({ decidedById: USER_VIEWER.id, reason: "nope" });
+    const res = await approve({ reason: "nope" });
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("role") });
     expect(db.approval.update).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it("role-check stub: 404 when the supplied decider is not an org user", async () => {
-    db.user.findFirst.mockResolvedValue(null);
-    const res = await approve({ decidedById: "user_ghost" });
-    expect(res.status).toBe(404);
+  it("service-level: rejects a non-CFO/CONTROLLER role before any update", async () => {
+    db.user.findFirst.mockResolvedValue(USER_VIEWER);
+    const outcome = await decideApproval(db as unknown as PrismaClient, ORG.id, {
+      approvalId: APPROVAL.id,
+      decision: "APPROVED",
+      decidedById: USER_VIEWER.id,
+    }).then(
+      (ok: unknown) => ok,
+      (e: unknown) => ({ error: e })
+    );
+    expect(outcome).toMatchObject({ error: { status: 403 } });
     expect(db.approval.update).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it("resolves a CFO decider and records them as actor + decidedBy", async () => {
-    const res = await approve({ decidedById: USER_CFO.id });
-    expect(res.status).toBe(200);
-    expect(db.approval.update).toHaveBeenCalledWith({
-      where: { id: APPROVAL.id },
-      data: expect.objectContaining({ decidedById: USER_CFO.id }),
-    });
-    expect(db.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ actorId: USER_CFO.id, action: "approval.approve" }),
-    });
+  it("service-level: 404 when a supplied decider is not an org user", async () => {
+    // Session resolution (findFirst without orgId) still succeeds; the decider
+    // lookup (findFirst with orgId) misses.
+    db.user.findFirst.mockImplementation(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve(where.orgId ? null : USER_CFO)
+    );
+    const outcome = await decideApproval(db as unknown as PrismaClient, ORG.id, {
+      approvalId: APPROVAL.id,
+      decision: "APPROVED",
+      decidedById: "user_ghost",
+    }).then(
+      (ok: unknown) => ok,
+      (e: unknown) => ({ error: e })
+    );
+    expect(outcome).toMatchObject({ error: { status: 404 } });
+    expect(db.approval.update).not.toHaveBeenCalled();
   });
 
   it("returns 409 when the approval is already decided", async () => {
@@ -300,15 +321,27 @@ describe("POST /api/approvals/[id]/reject", () => {
     });
     expect(db.approval.update).toHaveBeenCalledWith({
       where: { id: APPROVAL.id },
-      data: expect.objectContaining({ status: "REJECTED", reason: "Surcharge was pre-approved by the buyer" }),
+      data: expect.objectContaining({
+        status: "REJECTED",
+        decidedById: USER_CFO.id,
+        reason: "Surcharge was pre-approved by the buyer",
+      }),
     });
     expect(db.incidentAction.update).toHaveBeenCalledWith({
       where: { id: ACTION.id },
       data: { status: "REJECTED" },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ actorId: null, action: "approval.reject" }),
+      data: expect.objectContaining({ actorId: USER_CFO.id, action: "approval.reject" }),
     });
+  });
+
+  it("enforces the role gate: a VIEWER session cannot reject (403)", async () => {
+    db.user.findFirst.mockResolvedValue(USER_VIEWER);
+    const res = await reject({ reason: "nope" });
+    expect(res.status).toBe(403);
+    expect(db.approval.update).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
   it("returns 409 when already decided", async () => {
@@ -324,10 +357,10 @@ describe("executeAction — execution worker stub", () => {
     mockDefaults();
   });
 
-  const execute = (actionId: string) =>
-    executeAction(db as unknown as PrismaClient, ORG.id, actionId);
+  const execute = (actionId: string, actor: ActionActor = USER_CFO) =>
+    executeAction(db as unknown as PrismaClient, ORG.id, actionId, { actor });
 
-  it("transitions APPROVED → EXECUTED with a simulationResult Json + audit", async () => {
+  it("transitions APPROVED → EXECUTED with a simulationResult Json + audit by the actor", async () => {
     const updated = await execute(ACTION.id);
     expect(updated.status).toBe("EXECUTED");
     expect(updated.simulationResult).toMatchObject({ ok: true, engine: "stub", status: "EXECUTED" });
@@ -339,8 +372,21 @@ describe("executeAction — execution worker stub", () => {
       },
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ orgId: ORG.id, actorId: null, action: "action.execute" }),
+      data: expect.objectContaining({
+        orgId: ORG.id,
+        actorId: USER_CFO.id,
+        action: "action.execute",
+      }),
     });
+  });
+
+  it("enforces the CFO/CONTROLLER role gate: a VIEWER actor cannot execute (403)", async () => {
+    await expect(execute(ACTION.id, { id: USER_VIEWER.id, role: USER_VIEWER.role })).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(db.incidentAction.findFirst).not.toHaveBeenCalled();
+    expect(db.incidentAction.update).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
   it("refuses to execute anything but an APPROVED action (409)", async () => {

@@ -5,6 +5,11 @@ import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
 import { createIncidentSchema, type CreateIncidentInput } from "../validation/incident";
 import { NotFoundError, ValidationError } from "./errors";
+
+/** Optional per-call actor for audit attribution (session user). */
+export interface ActorOptions {
+  actorId?: string | null;
+}
 import {
   assertTransitionIncidentStatus,
   INCIDENT_STATUSES,
@@ -76,7 +81,17 @@ export async function getIncident(db: PrismaClient, orgId: string, id: string) {
   return incident;
 }
 
-export async function createIncident(db: PrismaClient, raw: unknown) {
+/**
+ * Create an incident. The tenant comes from the session (orgId param), never
+ * from the client body — createIncidentSchema no longer carries orgId, so a
+ * client-supplied orgId is stripped before any write (no tenant spoofing).
+ */
+export async function createIncident(
+  db: PrismaClient,
+  orgId: string,
+  raw: unknown,
+  opts: ActorOptions = {}
+) {
   const parsed = createIncidentSchema.safeParse(raw);
   if (!parsed.success) {
     throw new ValidationError(`invalid incident: ${parsed.error.message}`);
@@ -84,7 +99,7 @@ export async function createIncident(db: PrismaClient, raw: unknown) {
   const input: CreateIncidentInput = parsed.data;
   const incident = await db.financialIncident.create({
     data: {
-      orgId: input.orgId,
+      orgId,
       title: input.title,
       description: input.description,
       type: input.type as never,
@@ -95,7 +110,9 @@ export async function createIncident(db: PrismaClient, raw: unknown) {
   });
   await db.auditLog.create({
     data: {
-      orgId: input.orgId, action: "incident.create",
+      orgId,
+      actorId: opts.actorId ?? null,
+      action: "incident.create",
       entityType: "FinancialIncident", entityId: incident.id,
       metadata: { title: input.title, type: input.type } as never,
     },
@@ -118,7 +135,13 @@ export async function createIncident(db: PrismaClient, raw: unknown) {
  * Writes one AuditLog per update ("incident.status", "incident.assign", or
  * "incident.update" when both change).
  */
-export async function updateIncident(db: PrismaClient, orgId: string, id: string, raw: unknown) {
+export async function updateIncident(
+  db: PrismaClient,
+  orgId: string,
+  id: string,
+  raw: unknown,
+  opts: ActorOptions = {}
+) {
   if (!id) throw new ValidationError("incident id is required");
   const parsed = updateIncidentSchema.safeParse(raw);
   if (!parsed.success) {
@@ -155,7 +178,7 @@ export async function updateIncident(db: PrismaClient, orgId: string, id: string
   await db.auditLog.create({
     data: {
       orgId,
-      actorId: null,
+      actorId: opts.actorId ?? null,
       action:
         nextStatus !== undefined && assignedToId !== undefined
           ? "incident.update"

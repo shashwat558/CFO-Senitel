@@ -2,22 +2,23 @@
 // through the propose → approve/reject state machine (PROPOSED → APPROVED /
 // REJECTED), writing an AuditLog on every decision.
 //
-// Role check is a stub: no auth session exists yet, so the decider resolves
-// to null (audit actor null) unless a decidedById is supplied. When supplied,
-// the user must exist in the org and hold an approver role (403 otherwise).
+// Role gate: only CFO/CONTROLLER may decide (403 otherwise); VIEWER is
+// read-only. The decider comes from the session (decidedById = session user);
+// AuditLog.actorId is the decider's id.
 
 import type { PrismaClient } from "@prisma/client";
 import { approvalDecisionSchema } from "../approvals/types";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "./errors";
 
-/** Roles allowed to decide approvals. */
-export const APPROVER_ROLES = ["ADMIN", "CFO", "CONTROLLER"] as const;
+/** Roles allowed to decide approvals (and, via actions.ts, to execute them). */
+export const APPROVER_ROLES = ["CFO", "CONTROLLER"] as const;
 
 export function canDecideApproval(role: string): boolean {
   return (APPROVER_ROLES as readonly string[]).includes(role);
 }
 
-/** Stub actor resolution: null today (no auth); org-scoped user when provided. */
+/** Resolve + validate the decider (the session user via org-scoped lookup):
+ *  must exist in the org (404) and be CFO/CONTROLLER (403). */
 export async function resolveDecider(
   db: PrismaClient,
   orgId: string,

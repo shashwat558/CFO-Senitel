@@ -9,7 +9,20 @@
 
 import type { PrismaClient } from "@prisma/client";
 import { proposedActionSchema } from "../actions/types";
-import { ConflictError, NotFoundError, ValidationError } from "./errors";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "./errors";
+import { APPROVER_ROLES } from "./approvals";
+
+/** Roles allowed to execute an approved action (same gate as approval
+ *  decisions — CFO/CONTROLLER; VIEWER is read-only). */
+export function canExecuteAction(role: string): boolean {
+  return (APPROVER_ROLES as readonly string[]).includes(role);
+}
+
+/** Session actor for audit attribution (id) + role gate (role). */
+export interface ActionActor {
+  id: string;
+  role: string;
+}
 
 /**
  * Propose an IncidentAction (status PROPOSED) for a finding, and open a
@@ -19,7 +32,12 @@ import { ConflictError, NotFoundError, ValidationError } from "./errors";
  * belong to the incident. The action payload records the originating
  * findingId so intent stays traceable end-to-end.
  */
-export async function proposeAction(db: PrismaClient, orgId: string, raw: unknown) {
+export async function proposeAction(
+  db: PrismaClient,
+  orgId: string,
+  raw: unknown,
+  opts: { actorId?: string | null } = {}
+) {
   const parsed = proposedActionSchema.safeParse(raw);
   if (!parsed.success) {
     throw new ValidationError(`invalid action: ${parsed.error.message}`);
@@ -38,14 +56,19 @@ export async function proposeAction(db: PrismaClient, orgId: string, raw: unknow
   });
   if (!finding) throw new NotFoundError("finding not found");
 
-  // Approval.requestedById is required; without auth we fall back to the
-  // org's first (seeded) user as the deterministic requester. AuditLog still
-  // records actor null until sessions land.
-  const requester = await db.user.findFirst({
-    where: { orgId },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
+  // The session user requests the approval (and is the audit actor). The
+  // first-org-user fallback keeps direct service callers working without a
+  // session; AuditLog.actorId is filled whenever an actor is supplied.
+  const requester = opts.actorId
+    ? await db.user.findFirst({
+        where: { id: opts.actorId, orgId },
+        select: { id: true },
+      })
+    : await db.user.findFirst({
+        where: { orgId },
+        orderBy: { createdAt: "asc" },
+        select: { id: true },
+      });
   if (!requester) throw new NotFoundError("no org user available to request the approval");
 
   const { action, approval } = await db.$transaction(async (tx) => {
@@ -74,7 +97,7 @@ export async function proposeAction(db: PrismaClient, orgId: string, raw: unknow
   await db.auditLog.create({
     data: {
       orgId,
-      actorId: null,
+      actorId: opts.actorId ?? null,
       action: "action.propose",
       entityType: "IncidentAction",
       entityId: action.id,
@@ -96,8 +119,19 @@ export async function proposeAction(db: PrismaClient, orgId: string, raw: unknow
  * "simulated execution": marks it EXECUTED with a `simulationResult` Json
  * (or FAILED with the error). No side effects are applied; a real
  * simulation engine slots into the stub body.
+ *
+ * Role gate: only CFO/CONTROLLER may execute (403 otherwise). The actor —
+ * when supplied — is recorded as the AuditLog.actorId.
  */
-export async function executeAction(db: PrismaClient, orgId: string, actionId: string) {
+export async function executeAction(
+  db: PrismaClient,
+  orgId: string,
+  actionId: string,
+  opts: { actor?: ActionActor } = {}
+) {
+  if (opts.actor && !canExecuteAction(opts.actor.role)) {
+    throw new ForbiddenError("user role cannot execute actions");
+  }
   const action = await db.incidentAction.findFirst({
     where: { id: actionId, incident: { orgId } },
   });
@@ -137,7 +171,7 @@ export async function executeAction(db: PrismaClient, orgId: string, actionId: s
   await db.auditLog.create({
     data: {
       orgId,
-      actorId: null,
+      actorId: opts.actor?.id ?? null,
       action: "action.execute",
       entityType: "IncidentAction",
       entityId: action.id,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { KpiCard } from "@/components/KpiCard";
 
 interface TrendRow {
@@ -20,22 +20,30 @@ interface DashboardResp {
 }
 
 const MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const YEAR_OPTIONS = [2024, 2025, 2026];
 const fmt$ = (n: number) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardResp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [year, setYear] = useState<number>(2024);
+
+  const load = useCallback(async (y: number) => {
+    try {
+      const r = await fetch(`/api/dashboard?year=${y}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? "dashboard failed");
+      setData(j);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "dashboard failed");
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/api/dashboard")
-      .then(async (r) => {
-        const j = await r.json();
-        if (!r.ok) throw new Error(j.error ?? "dashboard failed");
-        setData(j);
-      })
-      .catch((e) => setError(e.message));
-  }, []);
+    load(year);
+  }, [year, load]);
 
   if (error) {
     return (
@@ -52,6 +60,11 @@ export default function DashboardPage() {
   if (!data) return <p className="muted">Loading dashboard…</p>;
 
   const mom = data.monthOverMonth;
+  const latestMonth = data.latest.month;
+  // Dynamic "latest vs prior" highlight — the two most recent months in the trend,
+  // whatever they are. Latest is emphasized, prior is demoted slightly.
+  const priorMonth = latestMonth - 1 >= 1 ? latestMonth - 1 : null;
+
   return (
     <>
       <h1>{data.org.name} — Dashboard</h1>
@@ -60,6 +73,14 @@ export default function DashboardPage() {
         incident(s) · Foundation phase: deterministic P&amp;L from posted GL lines.
       </p>
 
+      <div className="filters" style={{ marginBottom: 16 }}>
+        <label className="muted" htmlFor="year-select">Year</label>
+        <select id="year-select" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+          {YEAR_OPTIONS.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <span className="muted">{data.trend.length} months of trend data</span>
+      </div>
+
       <div className="grid">
         <KpiCard label="Revenue (latest)" value={fmt$(data.latest.revenue)} delta={`${mom.revenueVariance >= 0 ? "+" : ""}${fmt$(mom.revenueVariance)} MoM`} deltaTone={mom.revenueVariance >= 0 ? "pos" : "neg"} />
         <KpiCard label="COGS (latest)" value={fmt$(data.latest.cogs)} delta={`${mom.cogsVariance >= 0 ? "+" : ""}${fmt$(mom.cogsVariance)} MoM`} deltaTone={mom.cogsVariance <= 0 ? "pos" : "neg"} />
@@ -67,35 +88,40 @@ export default function DashboardPage() {
         <KpiCard label="Net income" value={fmt$(data.latest.netIncome)} />
       </div>
 
-      {data.augustVsJuly && (
+      {data.augustVsJuly && year === 2024 && (
         <div className="panel">
-          <h2>August vs July gross margin (demo question)</h2>
+          <h2>Aug vs Jul gross margin (demo question)</h2>
           <p className="muted">
-            July {data.augustVsJuly.julyMargin.toFixed(2)}% → August{" "}
+            Jul {data.augustVsJuly.julyMargin.toFixed(2)}% → Aug{" "}
             {data.augustVsJuly.augustMargin.toFixed(2)}% (
             {data.augustVsJuly.variance >= 0 ? "+" : ""}
-            {data.augustVsJuly.variance.toFixed(2)}pp). Phase 2 will let the Investigator Agent
-            explain this from vendor spend and contract prices.
+            {data.augustVsJuly.variance.toFixed(2)}pp). The Investigator Agent can
+            explain this from vendor spend and contract prices when you ask it on an incident.
           </p>
         </div>
       )}
 
       <div className="panel">
-        <h2>2024 monthly trend</h2>
+        <h2>{data.latest.year} monthly trend</h2>
         <table>
           <thead>
             <tr><th>Month</th><th>Revenue</th><th>COGS</th><th>Gross profit</th><th>Margin</th></tr>
           </thead>
           <tbody>
-            {data.trend.map((t) => (
-              <tr key={t.month} className={t.month === 8 ? "highlight" : ""}>
-                <td>{MONTHS[t.month]}</td>
-                <td>{fmt$(t.revenue)}</td>
-                <td>{fmt$(t.cogs)}</td>
-                <td>{fmt$(t.grossProfit)}</td>
-                <td>{t.grossMargin.toFixed(2)}%</td>
-              </tr>
-            ))}
+            {data.trend.map((t) => {
+              const isLatest = t.month === latestMonth;
+              const isPrior = t.month === priorMonth;
+              const cls = isLatest ? "highlight latest" : isPrior ? "highlight prior" : "";
+              return (
+                <tr key={t.month} className={cls}>
+                  <td>{MONTHS[t.month]}{isLatest ? ` (latest)` : isPrior ? ` (prior)` : ""}</td>
+                  <td>{fmt$(t.revenue)}</td>
+                  <td>{fmt$(t.cogs)}</td>
+                  <td>{fmt$(t.grossProfit)}</td>
+                  <td>{t.grossMargin.toFixed(2)}%</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

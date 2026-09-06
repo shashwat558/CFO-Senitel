@@ -182,7 +182,9 @@ Missing rows resolve to `{ row: null, reason }` — never fabricated.
 `promoteStagedRecords()` maps payments to `Customer` + `SENT` AR invoices with
 balanced `POSTED` entries, payouts/refunds to `PENDING` bank legs, all amounts
 converted by dated `lib/fx.ts` rates (INR→USD snapshot) with both figures
-stored. One bad row → `REJECTED` with reason; the batch continues. Needs
+stored. `POST /api/connect/dodo/webhook` verifies the SDK signature first,
+then stages (redelivery-safe) and audits; lifecycle noise acknowledges without
+staging. Promotion stays out of the webhook path (C5 scheduler owns it). One bad row → `REJECTED` with reason; the batch continues. Needs
 `DODO_PAYMENTS_API_KEY` (test mode works); payouts land on
 `DODO_PAYOUT_BANK_NAME` (default `Operating Checking`). Webhooks verify via the
 SDK `unwrap` before parsing.

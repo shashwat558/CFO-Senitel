@@ -58,6 +58,61 @@ function toCounts(records: NormalizedRecord[]): Record<string, number> {
   return counts;
 }
 
+export interface StageResult {
+  staged: number;
+  skipped: number;
+}
+
+/**
+ * Insert only unseen external ids for this org+provider. Shared by the pull
+ * path and the webhook path — both stay idempotent under retries/redelivery.
+ */
+export async function stageNormalizedRecords(
+  db: PrismaClient,
+  orgId: string,
+  provider: string,
+  records: NormalizedRecord[]
+): Promise<StageResult> {
+  let skipped = 0;
+  const fresh: NormalizedRecord[] = [];
+  if (records.length > 0) {
+    const keys = records.map((r) => ({ kind: r.kind, externalId: r.externalId }));
+    const existing = (await db.stagedRecord.findMany({
+      where: {
+        orgId,
+        provider,
+        OR: keys.map((k) => ({ kind: k.kind, externalId: k.externalId })),
+      },
+      select: { kind: true, externalId: true },
+    })) as Array<{ kind: string; externalId: string }>;
+    const seen = new Set(existing.map((e) => `${e.kind}:${e.externalId}`));
+    for (const r of records) {
+      if (seen.has(`${r.kind}:${r.externalId}`)) skipped++;
+      else fresh.push(r);
+    }
+    if (fresh.length > 0) {
+      await db.stagedRecord.createMany({
+        data: fresh.map((r) => ({
+          orgId,
+          provider,
+          kind: r.kind,
+          externalId: r.externalId,
+          occurredAt: r.occurredAt,
+          currency: r.currency,
+          amount: r.amount,
+          customerExternalId: r.customer?.externalId ?? null,
+          customerEmail: r.customer?.email ?? null,
+          customerName: r.customer?.name ?? null,
+          status: "STAGED",
+          raw: (r.raw ?? {}) as never,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
+  return { staged: fresh.length, skipped };
+}
+
 /**
  * Pull + stage for one (org, connector). Idempotent: re-running with the
  * same watermark inserts zero new rows and still advances the ledger.
@@ -103,51 +158,13 @@ export async function runConnectorPull(
 
   try {
     const { records, cursor } = await connector.pull(since);
-
-    // Idempotency: skip external ids already staged for this org+provider.
-    let skipped = 0;
-    const fresh: NormalizedRecord[] = [];
-    if (records.length > 0) {
-      const keys = records.map((r) => ({ kind: r.kind, externalId: r.externalId }));
-      const existing = (await db.stagedRecord.findMany({
-        where: {
-          orgId,
-          provider: connector.id,
-          OR: keys.map((k) => ({ kind: k.kind, externalId: k.externalId })),
-        },
-        select: { kind: true, externalId: true },
-      })) as Array<{ kind: string; externalId: string }>;
-      const seen = new Set(existing.map((e) => `${e.kind}:${e.externalId}`));
-      for (const r of records) {
-        if (seen.has(`${r.kind}:${r.externalId}`)) skipped++;
-        else fresh.push(r);
-      }
-      if (fresh.length > 0) {
-        await db.stagedRecord.createMany({
-          data: fresh.map((r) => ({
-            orgId,
-            provider: connector.id,
-            kind: r.kind,
-            externalId: r.externalId,
-            occurredAt: r.occurredAt,
-            currency: r.currency,
-            amount: r.amount,
-            customerExternalId: r.customer?.externalId ?? null,
-            customerEmail: r.customer?.email ?? null,
-            customerName: r.customer?.name ?? null,
-            status: "STAGED",
-            raw: (r.raw ?? {}) as never,
-          })),
-          skipDuplicates: true,
-        });
-      }
-    }
+    const { staged, skipped } = await stageNormalizedRecords(db, orgId, connector.id, records);
 
     const counts = toCounts(records);
     const result: RunPullResult = {
       syncRunId: run.id,
       pulled: records.length,
-      staged: fresh.length,
+      staged,
       skipped,
       cursor,
       counts,

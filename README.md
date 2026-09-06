@@ -97,9 +97,10 @@ lib/
                           Agent never touches Prisma directly.
                           (P&L, spend, contracts, invoices, banks, budgets,
                           forecasts, reconciliation.)
-  connectors/             Real-app import surface (stage 1: bank-CSV parser —
-                          pure parse+validate; persistence lands staged rows
-                          with source=CSV_IMPORT for reconciliation).
+  connectors/             Real-app import surface — read-only by design:
+                          Dodo Payments pull (payments/payouts/refunds) →
+                          StagedRecord → FX + promote into Invoice/Customer/
+                          BankTransaction. The agent reads promoted rows only.
   services/               API business logic (dashboard, incidents, org).
   db/                     Prisma singleton. Only services/tools import it.
   validation/             Zod schemas (transport + tool inputs).
@@ -152,9 +153,23 @@ default with the schema (seeded entries still write an explicit `POSTED`).
 `GET /api/incidents/[id]/evidence` lists the ledger (`?findingId=&toolName=&
 sourceType=`, paginated); `GET .../evidence/[evidenceId]?expand=source`
 resolves the lineage source row org-scoped (`INVOICE`, `CONTRACT`,
-`PURCHASE_ORDER`, `TRANSACTION`, `JOURNAL_ENTRY` today; bank/forecast/budget/
-document kinds are valid enum values that resolve once B4 models them).
+`PURCHASE_ORDER`, `TRANSACTION`, `JOURNAL_ENTRY`, `BANK_TRANSACTION`,
+`FORECAST`, `BUDGET`; only `CALCULATION`/`AGENT_OBSERVATION`/`DOCUMENT` still
+resolve to null — documents land with the connector file pipeline).
 Missing rows resolve to `{ row: null, reason }` — never fabricated.
+
+### Real-app connectors (Dodo Payments, read-only)
+
+`lib/connectors/` pulls external money events without ever writing back:
+`DodoConnector.pull(since)` (payments/payouts/refunds, watermarked, capped) →
+`StagedRecord` rows (unique on org+provider+kind+externalId, raw payload kept) →
+`promoteStagedRecords()` maps payments to `Customer` + `SENT` AR invoices with
+balanced `POSTED` entries, payouts/refunds to `PENDING` bank legs, all amounts
+converted by dated `lib/fx.ts` rates (INR→USD snapshot) with both figures
+stored. One bad row → `REJECTED` with reason; the batch continues. Needs
+`DODO_PAYMENTS_API_KEY` (test mode works); payouts land on
+`DODO_PAYOUT_BANK_NAME` (default `Operating Checking`). Webhooks verify via the
+SDK `unwrap` before parsing.
 
 ## Environment
 

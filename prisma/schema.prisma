@@ -53,6 +53,7 @@ enum PurchaseOrderStatus {
 enum BankTransactionSource {
   MANUAL
   CSV_IMPORT
+  DODO_IMPORT
 }
 
 enum BankReconciliationStatus {

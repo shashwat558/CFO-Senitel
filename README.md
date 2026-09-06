@@ -1,5 +1,7 @@
 # CFO Sentinel — foundation (Phase 1)
 
+![CI](https://github.com/shashwat558/CFO-Senitel/actions/workflows/ci.yml/badge.svg)
+
 Agentic financial incident investigation and response platform.
 This phase establishes a working TypeScript modular monolith: Next.js + PostgreSQL + Prisma,
 deterministic financial services, the first 8 financial tools, thin APIs, and a basic UI shell.
@@ -15,29 +17,61 @@ Vitest · Docker Compose
 
 ## Quickstart
 
+The fastest path is the production Docker stack: on a fresh clone, one command
+builds the app image, boots PostgreSQL, applies migrations, and seeds the
+deterministic dataset — leaving a working, seeded app on `:3000`.
+
+```bash
+cp .env.example .env        # fill in OPENAI_API_KEY to use the Investigator Agent
+docker compose up --build   # db → migrate → seed → app (http://localhost:3000)
+```
+
+| Step | Check |
+|---|---|
+| Stack up | `docker compose ps` → `app` running, `migrate` exited 0 |
+| App boots | `docker compose logs app` → `Ready` |
+| Health | `curl localhost:3000/api/health` → `{"status":"ok","db":"up",…}` |
+| Dashboard | `curl localhost:3000/api/dashboard` → trend, August-vs-July, top vendors |
+| Incidents | `curl localhost:3000/api/incidents` → seeded August margin incident |
+| Audit trail | `curl localhost:3000/api/audit-logs` → org-scoped activity ledger |
+| UI | `/dashboard`, `/incidents`, `/incidents/[id]`, `/approvals`, `/audit` |
+
+For local development (hot reload) without Docker, run against the compose DB:
+
 ```bash
 cp .env.example .env        # fill in OPENAI_API_KEY later; DB URL works as-is
-docker compose up -d
+docker compose up -d db     # only the PostgreSQL service
 npx prisma migrate dev      # creates DB schema
 npx prisma db seed          # deterministic Acme Industries dataset (12 months)
 npm run dev                 # http://localhost:3000
 ```
 
-| Step | Check |
-|---|---|
-| DB up | `docker compose ps`, `pg_isready` |
-| API | `curl localhost:3000/api/health` → `{"status":"ok","db":"up",…}` |
-| Dashboard | `curl localhost:3000/api/dashboard` → trend, August-vs-July, top vendors |
-| Incidents | `curl localhost:3000/api/incidents` → seeded August margin incident |
-| UI | `/dashboard`, `/incidents`, `/incidents/[id]`, `/approvals` |
-
 ## Scripts
 
 - `npm run dev` — Next.js dev server
-- `npm run build` — production build
+- `npm run build` — production build (standalone output)
 - `npm run typecheck` — `tsc --noEmit`
 - `npm test` — Vitest suite (seed integrity, calculations, tools, validation)
-- `npx prisma migrate dev` / `npx prisma db seed` / `npx prisma studio`
+- `npx prisma migrate deploy` / `npx prisma db seed` / `npx prisma studio`
+- `docker compose up --build` — full prod stack (db + migrate + seed + app)
+
+## CI
+
+`.github/workflows/ci.yml` runs on every push/PR: `prisma generate` →
+`prisma validate` → `typecheck` → `test` → `build`.
+
+## Rate limiting (Investigations)
+
+`POST /api/incidents/[id]/investigate` is rate-limited **per org** to
+**10 requests/minute** (sliding window) by default, because each call spins up
+the expensive LLM investigation loop. Knobs (see `.env.example`):
+
+- `RATE_LIMIT_MAX_REQUESTS` — window budget (default `10`; `0` disables)
+- `RATE_LIMIT_WINDOW_MS` — window length in ms (default `60000`)
+
+Exceeding the limit returns `429` with a `Retry-After` header. The limiter is
+in-process (good for the single-instance Docker deploy); swap `lib/ratelimit.ts`
+for a shared store if you scale horizontally.
 
 ## Architecture
 
@@ -76,15 +110,25 @@ never hardcoded as a conclusion. The demo question *"Why did gross margin fall
 in August?"* is answerable via `getPnl → comparePeriods → breakDownMetric →
 getVendorSpend → compareVendorPrices → calculateFinancialImpact`.
 
+### Audit log
+
+Every user-driven mutation (incident status, assignment, approval decisions,
+investigation cancellation, verification runs) appends an `AuditLog` row scoped
+to `orgId` with actor, entity, and a JSON `metadata` payload. New `JournalEntry`
+rows default to `DRAFT` in Prisma; the migration
+`20260906140000_align_journal_status_default_draft` aligns the PostgreSQL column
+default with the schema (seeded entries still write an explicit `POSTED`).
+
 ## Environment
 
-See `.env.example`: `DATABASE_URL`, `OPENAI_API_KEY` (Phase 2+), `MODEL_NAME`.
-Never hardcode secrets.
+See `.env.example`: `DATABASE_URL`, `OPENAI_API_KEY`, `MODEL_NAME`, and optional
+`RATE_LIMIT_MAX_REQUESTS` / `RATE_LIMIT_WINDOW_MS`. Never hardcode secrets.
 
 ## Definition of done (Phase 1)
 
-`docker compose up -d` → `prisma migrate dev` → `prisma db seed` → `npm run dev`
-yields a working app on seeded Acme data, with passing tests + clean build.
+`docker compose up --build` on a fresh clone → migrate + seed + app runs on
+seeded Acme data with `GET /api/health` → `{status:ok, db:up}`, passing tests
+and a clean build, and a green CI badge.
 
 ## Next step → Phase 2: Investigator Agent
 

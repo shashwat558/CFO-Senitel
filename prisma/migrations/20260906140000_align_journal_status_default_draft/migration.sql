@@ -1,0 +1,11 @@
+-- AlterTable
+-- Align the PostgreSQL column default with the Prisma schema default.
+-- The Foundation migration created `JournalEntry.status` with
+-- DEFAULT 'POSTED', but schema.prisma declares `@default(DRAFT)`.
+--
+-- This is a DDL-only default change: existing rows keep their value and the
+-- seeded dataset always writes an explicit status (POSTED for completed
+-- entries, DRAFT for in-flight drafts), so nothing observable changes except
+-- newly-inserted rows that omit `status` will now default to DRAFT to match
+-- the schema contract.
+ALTER TABLE "JournalEntry" ALTER COLUMN "status" SET DEFAULT 'DRAFT';

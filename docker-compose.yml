@@ -1,3 +1,14 @@
+# CFO Sentinel — production Docker Compose
+#
+# `docker compose up --build` brings up the full stack on a fresh clone:
+#   db (PostgreSQL) → migrate (applies schema) + seed (deterministic Acme data)
+#   → app (Next.js standalone server on :3000)
+#
+# Secrets are injected via `.env` (OPENAI_API_KEY, MODEL_NAME) and
+# DATABASE_URL is derived from the compose defaults.
+
+name: cfo-sentinel
+
 services:
   db:
     image: postgres:16-alpine
@@ -16,6 +27,43 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot: apply migrations then seed a deterministic dataset. Stops after
+  # it finishes ("service exited with code 0") — it is the setup step, not a
+  # long-lived service. `app` waits for this to complete before starting.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    image: cfo-sentinel-migrate:latest
+    container_name: cfo-sentinel-migrate
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed"
+    environment:
+      DATABASE_URL: postgresql://cfo:cfo_secret@db:5432/cfo_sentinel?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Production Next.js standalone server.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    image: cfo-sentinel:latest
+    container_name: cfo-sentinel-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://cfo:cfo_secret@db:5432/cfo_sentinel?schema=public
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MODEL_NAME: ${MODEL_NAME:-gpt-4o-mini}
+      NODE_ENV: production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   cfo-sentinel-pgdata:

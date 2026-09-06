@@ -249,6 +249,92 @@ describe("investigator tool loop", () => {
     expect(res.status).toBe("CANCELLED");
   });
 
+  it("marks a cancelled run CANCELLED with a finishedAt timestamp", async () => {
+    const db = mockDb();
+    const { llm } = fakeLlm([{ content: { summary: "x" } }]);
+    const controller = new AbortController();
+    controller.abort();
+    const res = await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
+      question: "Why?", signal: controller.signal,
+    });
+    expect(res.status).toBe("CANCELLED");
+    expect(db.agentRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "run_1" },
+        data: expect.objectContaining({ status: "CANCELLED", finishedAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it("persists the idempotencyKey onto the AgentRun row", async () => {
+    const db = mockDb();
+    const { llm } = fakeLlm([
+      { content: { thinking: "done", done: true, summary: "Done." } },
+    ]);
+    await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
+      question: "Why?", idempotencyKey: "key-abc",
+    });
+    expect(db.agentRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orgId: "org1",
+        incidentId: "inc1",
+        idempotencyKey: "key-abc",
+        status: "RUNNING",
+      }),
+    });
+  });
+
+  it("stores a null idempotencyKey when none is supplied", async () => {
+    const db = mockDb();
+    const { llm } = fakeLlm([
+      { content: { thinking: "done", done: true, summary: "Done." } },
+    ]);
+    await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
+      question: "Why?",
+    });
+    expect(db.agentRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ idempotencyKey: null }),
+    });
+  });
+
+  it("does not retry a transient LLM failure when maxLlmRetries is 0", async () => {
+    const db = mockDb();
+    let calls = 0;
+    const llm = {
+      continueConversation: vi.fn(async () => {
+        calls += 1;
+        throw new InvestigatorError("SERVER", "boom", true);
+      }),
+    } as unknown as InvestigatorClient;
+    const res = await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
+      question: "Why?", maxLlmRetries: 0,
+    });
+    expect(res.status).toBe("FAILED");
+    expect(calls).toBe(1);
+  });
+
+  it("bounds LLM retries at maxLlmRetries", async () => {
+    const db = mockDb();
+    let calls = 0;
+    const llm = {
+      continueConversation: vi.fn(async () => {
+        calls += 1;
+        throw new InvestigatorError("SERVER", "boom", true);
+      }),
+    } as unknown as InvestigatorClient;
+    const res = await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1",
+      question: "Why?", maxLlmRetries: 1,
+    });
+    expect(res.status).toBe("FAILED");
+    // 1 initial attempt + 1 retry, then give up.
+    expect(calls).toBe(2);
+  });
+
   it("abandons an unsupported hypothesis and investigates another explanation", async () => {
     const db = mockDb();
     const { llm } = fakeLlm([

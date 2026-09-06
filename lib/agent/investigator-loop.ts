@@ -134,6 +134,8 @@ export interface LoopOptions {
   maxIterations?: number;
   /** Max retries per failed LLM call (default 2). */
   maxLlmRetries?: number;
+  /** Client-supplied idempotency token, persisted on the AgentRun row. */
+  idempotencyKey?: string;
   actorId?: string;
   signal?: AbortSignal;
   onStep?: (step: { seq: number; kind: string; detail: string }) => void;
@@ -168,6 +170,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     question,
     maxIterations = 8,
     maxLlmRetries = 2,
+    idempotencyKey,
     signal,
   } = opts;
 
@@ -175,6 +178,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
     data: {
       orgId,
       incidentId,
+      idempotencyKey: idempotencyKey ?? null,
       status: "RUNNING",
       input: { question } as never,
       modelName: "investigator-loop",

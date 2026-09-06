@@ -16,6 +16,7 @@ export interface BankLeg {
   description: string;
   amount: unknown;
   status: string;
+  source: string;
   invoiceId: string | null;
 }
 
@@ -28,10 +29,12 @@ export interface BankBalanceRow {
   balance: number;
 }
 
+export const BANK_SOURCES = ["MANUAL", "CSV_IMPORT", "DODO_IMPORT"] as const;
+
 export async function fetchBankTransactions(
   db: PrismaClient,
   orgId: string,
-  opts: { bankAccountId?: string; status?: string; start?: Date; end?: Date } = {}
+  opts: { bankAccountId?: string; status?: string; source?: string; start?: Date; end?: Date } = {}
 ): Promise<BankLeg[]> {
   if (!orgId) throw new Error("orgId is required");
   const { start, end } = opts;
@@ -41,11 +44,15 @@ export async function fetchBankTransactions(
   if (opts.status !== undefined && opts.status !== "PENDING" && opts.status !== "RECONCILED") {
     throw new Error(`invalid status: ${opts.status}`);
   }
+  if (opts.source !== undefined && !(BANK_SOURCES as readonly string[]).includes(opts.source)) {
+    throw new Error(`invalid source: ${opts.source}`);
+  }
   const rows = await db.bankTransaction.findMany({
     where: {
       orgId,
       ...(opts.bankAccountId ? { bankAccountId: opts.bankAccountId } : {}),
       ...(opts.status ? { status: opts.status as never } : {}),
+      ...(opts.source ? { source: opts.source as never } : {}),
       ...(start || end
         ? { date: { ...(start ? { gte: start } : {}), ...(end ? { lt: end } : {}) } }
         : {}),

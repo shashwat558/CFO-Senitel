@@ -8,6 +8,7 @@ export const getBankTransactionsInput = z
     orgId: orgIdSchema,
     bankAccountId: z.string().min(1).optional(),
     status: z.enum(["PENDING", "RECONCILED"]).optional(),
+    source: z.enum(["MANUAL", "CSV_IMPORT", "DODO_IMPORT"]).optional(),
     startDate: z.string().datetime({ offset: true }).optional(),
     endDate: z.string().datetime({ offset: true }).optional(),
     limit: z.number().int().min(1).max(200).default(100),
@@ -33,6 +34,7 @@ async function run(input: GetBankTransactionsInput, ctx: ToolContext) {
     legs = await fetchBankTransactions(ctx.db, input.orgId, {
       ...(input.bankAccountId ? { bankAccountId: input.bankAccountId } : {}),
       ...(input.status ? { status: input.status } : {}),
+      ...(input.source ? { source: input.source } : {}),
       ...(input.startDate && input.endDate
         ? { start: new Date(input.startDate), end: new Date(input.endDate) }
         : {}),
@@ -47,6 +49,7 @@ async function run(input: GetBankTransactionsInput, ctx: ToolContext) {
     description: l.description,
     amount: Number(l.amount),
     status: l.status,
+    source: l.source,
     invoiceId: l.invoiceId,
   }));
   await auditToolCall(ctx, "getBankTransactions", input, true, { resultCount: output.length });
@@ -56,7 +59,7 @@ async function run(input: GetBankTransactionsInput, ctx: ToolContext) {
 export const getBankTransactionsTool: ToolDefinition<GetBankTransactionsInput, Awaited<ReturnType<typeof run>>> = {
   name: "getBankTransactions",
   description:
-    "List bank legs (signed amounts: +collections, −payments/payroll/opex) with status PENDING/RECONCILED. Evidence for cash movements and unsettled items.",
+    "List bank legs (signed amounts: +collections, −payments/payroll/opex) with status PENDING/RECONCILED and source MANUAL/CSV_IMPORT/DODO_IMPORT. Filter source=DODO_IMPORT for connector-imported collections, then follow invoiceId for invoice lineage. Evidence for cash movements and unsettled items.",
   inputSchema: getBankTransactionsInput,
   execute: run,
 };

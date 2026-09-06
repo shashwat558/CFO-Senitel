@@ -184,7 +184,12 @@ balanced `POSTED` entries, payouts/refunds to `PENDING` bank legs, all amounts
 converted by dated `lib/fx.ts` rates (INR→USD snapshot) with both figures
 stored. `POST /api/connect/dodo/webhook` verifies the SDK signature first,
 then stages (redelivery-safe) and audits; lifecycle noise acknowledges without
-staging. Promotion stays out of the webhook path (C5 scheduler owns it). One bad row → `REJECTED` with reason; the batch continues. Needs
+staging. Promotion stays out of the webhook path (C5 scheduler owns it).
+`POST /api/connect/sync` runs one audited tick (pull → stage → promote) for
+cron-style schedulers; `GET /api/connect/sync` lists recent `SyncRun` rows so
+silent sync death is visible. `getBankTransactions` accepts
+`source=DODO_IMPORT`, so *"yesterday's Dodo collections and their invoice
+lineage"* is one tool call plus `?expand=source` on each `invoiceId`. One bad row → `REJECTED` with reason; the batch continues. Needs
 `DODO_PAYMENTS_API_KEY` (test mode works); payouts land on
 `DODO_PAYOUT_BANK_NAME` (default `Operating Checking`). Webhooks verify via the
 SDK `unwrap` before parsing.

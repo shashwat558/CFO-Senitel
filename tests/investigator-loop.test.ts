@@ -237,6 +237,39 @@ describe("investigator tool loop", () => {
     expect(calls).toBe(3);
   });
 
+  it("recovers from a rejected invented-tool turn with a nudge instead of failing", async () => {
+    const db = mockDb();
+    let calls = 0;
+    const seenMessages: unknown[][] = [];
+    const llm = {
+      continueConversation: vi.fn(async (req: { messages: unknown[]; responseSchema: { name: string } }) => {
+        calls += 1;
+        seenMessages.push(req.messages);
+        if (req.responseSchema.name === "investigation_plan") {
+          return { content: PLAN, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+        }
+        if (calls === 2) {
+          throw new InvestigatorError(
+            "BAD_REQUEST",
+            "tool call validation failed: attempted to call tool 'commentary' which is not a valid tool",
+            false
+          );
+        }
+        return { content: { thinking: "back on track", done: true, summary: "Done." }, toolCalls: [], finishReason: "stop", usage: null, model: "fake" };
+      }),
+    } as unknown as InvestigatorClient;
+    const res = await runInvestigatorLoop({
+      db, llm, toolCtx: toolCtxFor(db), orgId: "org1", incidentId: "inc1", question: "Why?",
+    });
+    expect(res.status).toBe("COMPLETED");
+    // the nudge names the rule and the loop consumed one budgeted iteration
+    const nudged = seenMessages.some((msgs) =>
+      JSON.stringify(msgs).includes("never invent tool names")
+    );
+    expect(nudged).toBe(true);
+    expect(res.iterations).toBe(2);
+  });
+
   it("supports cancellation via AbortSignal", async () => {
     const db = mockDb();
     const { llm } = fakeLlm([{ content: { summary: "x" } }]);

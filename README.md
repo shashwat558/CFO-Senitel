@@ -203,7 +203,7 @@ See `.env.example`: `DATABASE_URL`, LLM keys, `MODEL_NAME`, and optional
 
 The Investigator Agent talks OpenAI-compatible chat completions, defaulting to
 Groq — free, no credit card: sign up at https://console.groq.com, create a key,
-set `GROQ_API_KEY` (defaults for base URL + `llama-3.3-70b-versatile` already
+set `GROQ_API_KEY` (defaults for base URL + `openai/gpt-oss-120b` already
 point there). One investigation ≈ 10 calls, inside free limits (30 req/min).
 `OPENAI_API_KEY` still works as a fallback key; point `OPENAI_BASE_URL` at
 `https://api.openai.com/v1` (with `MODEL_NAME=gpt-4o-mini`) to go back to

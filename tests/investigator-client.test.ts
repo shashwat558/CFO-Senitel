@@ -79,14 +79,40 @@ describe("investigator client", () => {
     expect(res.content).toEqual({ hypothesis: "COGS overcharge", confidence: 0.8 });
   });
 
-  it("rejects non-JSON content cleanly", async () => {
+  it("rejects non-JSON content cleanly when no tool calls carry the turn", async () => {
     const bad = structuredClone(completionFixture);
     bad.choices[0].message.content = "not json at all";
+    bad.choices[0].message.tool_calls = [];
     const { client } = mockClient(bad);
     await expect(createInvestigatorClient({ client }).requestStructured(req)).rejects.toMatchObject({
       name: "InvestigatorError",
       code: "INVALID_RESPONSE",
     });
+  });
+
+  it("salvages prose as thinking when tool calls are present (no response_format turns)", async () => {
+    const mixed = structuredClone(completionFixture);
+    mixed.choices[0].message.content = "let me check the ledger first";
+    const { client } = mockClient(mixed);
+    const res = await createInvestigatorClient({ client }).requestStructured(req);
+    expect(res.content).toMatchObject({ thinking: "let me check the ledger first" });
+    expect(res.toolCalls).toHaveLength(1);
+  });
+
+  it("omits response_format on tool turns (Groq rejects the combination)", async () => {
+    const { client, create } = mockClient(completionFixture);
+    await createInvestigatorClient({ client }).continueConversation({
+      messages: [{ role: "user", content: "dig in" }],
+      responseSchema: req.responseSchema,
+      tools: [{ type: "function", function: { name: "getPnl", description: "x" } }],
+    });
+    const body = create.mock.calls[0][0] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("response_format");
+    expect(body).toHaveProperty("tools");
+    const messages = body.messages as Array<{ role: string; content: string }>;
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe("user");
+    expect(last.content).toContain("finding");
   });
 
   it("maps auth/rate-limit/timeout errors to clean codes", async () => {

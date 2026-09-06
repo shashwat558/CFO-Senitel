@@ -49,6 +49,7 @@ export const INVESTIGATOR_SYSTEM_PROMPT =
   "report every turn their status (PROPOSED/INVESTIGATING/SUPPORTED/REJECTED) with confidence " +
   "0-1 plus supporting/contradicting notes, and abandon (REJECTED) any hypothesis the evidence " +
   "contradicts in favor of a better explanation. " +
+  "Call only tools listed in this conversation — inventing a tool name rejects your turn. " +
   "Never invent numbers — every figure must come from a tool result.";
 
 // Phase 0 (UNDERSTAND -> PLAN): the agent must first frame the investigation
@@ -75,7 +76,9 @@ const PLAN_SCHEMA = {
       unknowns: { type: "array", items: { type: "string" } },
       initialPlan: { type: "array", items: { type: "string" } },
     },
-    required: ["objective", "period", "metric", "initialPlan"],
+    // NOTE (Groq strict mode): `required` must list every key in
+    // `properties`, or the provider 400s the structured request.
+    required: ["objective", "period", "metric", "knownFacts", "unknowns", "initialPlan"],
     additionalProperties: false,
   },
 };
@@ -93,7 +96,7 @@ const HYPOTHESIS_UPDATE_SCHEMA = {
     supporting: { type: "array", items: { type: "string" } },
     contradicting: { type: "array", items: { type: "string" } },
   },
-  required: ["status"],
+  required: ["id", "statement", "status", "confidence", "supporting", "contradicting"],
   additionalProperties: false,
 };
 
@@ -109,7 +112,7 @@ const DELIBERATION_SCHEMA = {
       done: { type: "boolean" },
       summary: { type: "string" },
     },
-    required: ["thinking", "done"],
+    required: ["thinking", "learned", "nextFocus", "hypotheses", "done", "summary"],
     additionalProperties: false,
   },
 };
@@ -158,6 +161,55 @@ function throwIfCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new InvestigatorError("TIMEOUT", "Investigation cancelled", false);
   }
+}
+
+/**
+ * Grounding block for the first user message: the model cannot guess the
+ * tenant id or the data window, and guessing either wastes turns on
+ * ORG_MISMATCH / empty-range failures (observed live on Groq). Everything
+ * here comes from the database; if a lookup fails (e.g. minimal test
+ * doubles), that line is skipped rather than fabricated.
+ */
+async function buildToolContextBlock(
+  db: PrismaClient,
+  orgId: string,
+  incidentId: string
+): Promise<string> {
+  const lines = [
+    `Context for tool calls: your orgId is "${orgId}" — pass it verbatim as the orgId argument to every tool. Never invent a different orgId.`,
+  ];
+  try {
+    const incident = await db.financialIncident.findFirst({
+      where: { id: incidentId, orgId },
+      select: { title: true, periodStart: true, periodEnd: true },
+    });
+    if (incident?.periodStart && incident?.periodEnd) {
+      const s = new Date(incident.periodStart).toISOString().slice(0, 10);
+      const e = new Date(incident.periodEnd).toISOString().slice(0, 10);
+      lines.push(
+        `You are investigating "${incident.title}", covering ${s} to ${e}. Start with P&L for those months (year + month, or startDate + endDate).`
+      );
+    }
+  } catch {
+    // Context is best-effort; the loop must run without it.
+  }
+  try {
+    const bounds = await db.transaction.aggregate({
+      where: { orgId },
+      _min: { date: true },
+      _max: { date: true },
+    });
+    const min = bounds._min.date;
+    const max = bounds._max.date;
+    if (min && max) {
+      lines.push(
+        `Posted financial data spans ${new Date(min).toISOString().slice(0, 10)} to ${new Date(max).toISOString().slice(0, 10)}. Query inside that window.`
+      );
+    }
+  } catch {
+    // Context is best-effort; the loop must run without it.
+  }
+  return lines.join("\n");
 }
 
 export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult> {
@@ -222,7 +274,7 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
 
   const messages: LlmMessage[] = [
     { role: "system", content: INVESTIGATOR_SYSTEM_PROMPT },
-    { role: "user", content: question },
+    { role: "user", content: `${question}\n\n${await buildToolContextBlock(db, orgId, incidentId)}` },
   ];
   const tools = getOpenAITools();
 
@@ -375,7 +427,32 @@ export async function runInvestigatorLoop(opts: LoopOptions): Promise<LoopResult
       iterations += 1;
 
       // --- Dynamic deliberation turn: the agent picks its own next move ---
-      const response = await callLlm(DELIBERATION_SCHEMA, true);
+      // A rejected turn (e.g. the model invented a tool name and the provider
+      // refused it) is correctable feedback, not run death: nudge and continue.
+      // The iteration budget still bounds the loop.
+      let response;
+      try {
+        response = await callLlm(DELIBERATION_SCHEMA, true);
+      } catch (err) {
+        const badTool =
+          err instanceof InvestigatorError &&
+          err.code === "BAD_REQUEST" &&
+          /tool/i.test(err.message);
+        if (!badTool) throw err;
+        await persistStep({
+          input: { iteration: iterations },
+          reasoning: `rejected turn (invalid tool call): ${err instanceof Error ? err.message : String(err)}`.slice(0, 2000),
+          status: "ERROR",
+        });
+        messages.push({
+          role: "user",
+          content:
+            "Your last turn was rejected because it named a tool that does not exist. " +
+            "Use ONLY the tools provided in this conversation — never invent tool names. " +
+            "Either call a listed tool with valid arguments, or set done:true with your final summary.",
+        });
+        continue;
+      }
 
       await persistStep({
         input: { iteration: iterations },

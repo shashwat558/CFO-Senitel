@@ -36,7 +36,7 @@ afterEach(() => {
 describe("LLM provider wiring", () => {
   it("defaults to the Groq free tier", () => {
     expect(GROQ_BASE_URL).toBe("https://api.groq.com/openai/v1");
-    expect(DEFAULT_MODEL).toBe("llama-3.3-70b-versatile");
+    expect(DEFAULT_MODEL).toBe("openai/gpt-oss-120b");
     delete process.env.OPENAI_BASE_URL;
     expect(getBaseURL()).toBe(GROQ_BASE_URL);
   });
@@ -83,10 +83,10 @@ describe("LLM provider wiring", () => {
     });
   });
 
-  it("defaults the model to llama-3.3-70b-versatile, MODEL_NAME wins", () => {
+  it("defaults the model to openai/gpt-oss-120b, MODEL_NAME wins", () => {
     withEnv({ MODEL_NAME: undefined as unknown as string }, () => {
       delete process.env.MODEL_NAME;
-      expect(getModelName()).toBe("llama-3.3-70b-versatile");
+      expect(getModelName()).toBe("openai/gpt-oss-120b");
     });
     withEnv({ MODEL_NAME: "gpt-4o-mini" }, () => {
       expect(getModelName()).toBe("gpt-4o-mini");

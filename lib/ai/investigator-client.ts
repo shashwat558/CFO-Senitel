@@ -271,21 +271,40 @@ export class InvestigatorClient {
       : timeoutSignal;
 
     let completion: OpenAI.Chat.Completions.ChatCompletion;
+    // Groq (and some OpenAI-compatible hosts) reject `response_format`
+    // combined with `tools` (400). Tool turns therefore skip response_format
+    // and carry the expected shape as a trailing instruction instead; the
+    // strict JSON parse in safeParseContent still guards the content.
+    const useTools = !!req.tools?.length;
+    const apiMessages = toApiMessages(req.messages);
+    if (useTools) {
+      apiMessages.push({
+        role: "user",
+        content:
+          `Reply with a single JSON object matching schema "${req.responseSchema.name}": ` +
+          `${JSON.stringify(req.responseSchema.schema)}. No prose outside the JSON. ` +
+          `If you need data first, call a tool instead of answering.`,
+      });
+    }
     try {
       completion = await client.chat.completions.create(
         {
           model: config.model,
           temperature: config.temperature,
           max_tokens: config.maxTokens,
-          messages: toApiMessages(req.messages),
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: req.responseSchema.name,
-              schema: req.responseSchema.schema,
-              strict: req.responseSchema.strict ?? true,
-            },
-          },
+          messages: apiMessages,
+          ...(useTools
+            ? {}
+            : {
+                response_format: {
+                  type: "json_schema",
+                  json_schema: {
+                    name: req.responseSchema.name,
+                    schema: req.responseSchema.schema,
+                    strict: req.responseSchema.strict ?? true,
+                  },
+                },
+              }),
           ...(req.tools ? { tools: req.tools, tool_choice: req.toolChoice ?? "auto" } : {}),
         },
         { signal: combined, timeout: config.timeoutMs, maxRetries: config.maxRetries },
@@ -313,7 +332,20 @@ export class InvestigatorClient {
       }));
 
     const refusal = (message as { refusal?: unknown }).refusal;
-    const content = refusal != null ? null : safeParseContent(message.content);
+    // Without response_format (tool turns), the model may return prose
+    // alongside tool calls. Never drop valid tool calls over unparseable
+    // prose — keep it as thinking context; strict JSON is still required
+    // when the turn carries no tool calls.
+    let content: unknown;
+    try {
+      content = refusal != null ? null : safeParseContent(message.content);
+    } catch (err) {
+      if (toolCalls.length > 0 && typeof message.content === "string" && message.content) {
+        content = { thinking: message.content.slice(0, 2000) };
+      } else {
+        throw err;
+      }
+    }
 
     return {
       content,

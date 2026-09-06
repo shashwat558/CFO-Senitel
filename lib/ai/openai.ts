@@ -2,7 +2,7 @@
 // authoritative financial calculations — only for investigation reasoning.
 // Default backend is Groq's free tier (no key needed for anything else):
 //   GROQ_API_KEY + OPENAI_BASE_URL=https://api.groq.com/openai/v1 +
-//   MODEL_NAME=llama-3.3-70b-versatile.
+//   MODEL_NAME=openai/gpt-oss-120b.
 // Point OPENAI_BASE_URL at https://api.openai.com/v1 with an OpenAI key to go
 // back to OpenAI. Client is constructed lazily so unit tests / builds without
 // a key succeed.
@@ -11,7 +11,7 @@ import OpenAI from "openai";
 
 export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 export const OPENAI_BASE_URL_DEFAULT = "https://api.openai.com/v1";
-export const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+export const DEFAULT_MODEL = "openai/gpt-oss-120b";
 
 let cached: OpenAI | null = null;
 let cachedKey: string | null = null;

@@ -1,11 +1,29 @@
 // Incident service — all incident read/write logic lives here.
 // API routes validate transport concerns and delegate here.
 
+import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
 import { createIncidentSchema, type CreateIncidentInput } from "../validation/incident";
 import { NotFoundError, ValidationError } from "./errors";
+import {
+  assertTransitionIncidentStatus,
+  INCIDENT_STATUSES,
+  type IncidentStatus,
+} from "./incident-status";
 
-const INCIDENT_STATUSES = ["OPEN", "INVESTIGATING", "PENDING_APPROVAL", "RESOLVED", "CLOSED"] as const;
+/** Body schema for PATCH /api/incidents/[id] — status transitions and/or
+ *  assignment. At least one field must be supplied; unknown statuses are
+ *  rejected before any write. */
+export const updateIncidentSchema = z
+  .object({
+    status: z.enum(INCIDENT_STATUSES).optional(),
+    // Assign the incident to an org user (stub actor resolution like the
+    // approval decider — no auth session exists yet).
+    assignedToId: z.string().min(1).optional(),
+  })
+  .refine((v) => v.status !== undefined || v.assignedToId !== undefined, {
+    message: "provide at least one of status or assignedToId",
+  });
 
 function sanitizePage(n: unknown, fallback: number): number {
   const v = typeof n === "string" ? Number(n) : (n as number);
@@ -83,4 +101,75 @@ export async function createIncident(db: PrismaClient, raw: unknown) {
     },
   });
   return incident;
+}
+
+/**
+ * Update an incident: transition its status along the lifecycle and/or assign
+ * it to an org user.
+ *
+ *   - status: validated by the incident status machine (which reuses the
+ *     investigation phase edges — VERIFY → RESOLVE is the PENDING_APPROVAL →
+ *     RESOLVED path; an invalid move is a 400 ValidationError). Same-status is
+ *     idempotent (200, no write).
+ *   - assignedToId: the user must belong to the org (404 otherwise). No role
+ *     gate — this is a bookkeeping assignment, not an approval decision.
+ *   - resolvedAt is stamped when transitioning to RESOLVED.
+ *
+ * Writes one AuditLog per update ("incident.status", "incident.assign", or
+ * "incident.update" when both change).
+ */
+export async function updateIncident(db: PrismaClient, orgId: string, id: string, raw: unknown) {
+  if (!id) throw new ValidationError("incident id is required");
+  const parsed = updateIncidentSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ValidationError(`invalid incident update: ${parsed.error.message}`);
+  }
+  const { status: nextStatus, assignedToId } = parsed.data;
+
+  const incident = await db.financialIncident.findFirst({ where: { id, orgId } });
+  if (!incident) throw new NotFoundError("incident not found");
+
+  if (nextStatus !== undefined && nextStatus !== incident.status) {
+    assertTransitionIncidentStatus(incident.status as IncidentStatus, nextStatus);
+  }
+
+  let assignee: { id: string } | null = null;
+  if (assignedToId !== undefined) {
+    assignee = await db.user.findFirst({
+      where: { id: assignedToId, orgId },
+      select: { id: true },
+    });
+    if (!assignee) throw new NotFoundError("assignee not found");
+  }
+
+  const data: Record<string, unknown> = {};
+  if (nextStatus !== undefined && nextStatus !== incident.status) data.status = nextStatus;
+  if (nextStatus === "RESOLVED" && nextStatus !== incident.status) data.resolvedAt = new Date();
+  if (assignedToId !== undefined) data.assignedToId = assignedToId;
+
+  const updated =
+    Object.keys(data).length === 0
+      ? incident
+      : await db.financialIncident.update({ where: { id }, data: data as never });
+
+  await db.auditLog.create({
+    data: {
+      orgId,
+      actorId: null,
+      action:
+        nextStatus !== undefined && assignedToId !== undefined
+          ? "incident.update"
+          : assignedToId !== undefined
+            ? "incident.assign"
+            : "incident.status",
+      entityType: "FinancialIncident",
+      entityId: id,
+      metadata: {
+        ...(nextStatus !== undefined ? { from: incident.status, to: nextStatus } : {}),
+        ...(assignedToId !== undefined ? { assignedToId } : {}),
+      } as never,
+    },
+  });
+
+  return updated;
 }

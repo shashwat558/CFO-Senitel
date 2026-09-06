@@ -98,7 +98,8 @@ lib/
   services/               API business logic (dashboard, incidents, org).
   db/                     Prisma singleton. Only services/tools import it.
   validation/             Zod schemas (transport + tool inputs).
-  evidence/               recordEvidence() — every conclusion traces here.
+  evidence/               recordEvidence() + lineage service — every conclusion
+                          traces here with sourceType/sourceId (see below).
   ai/                     Lazy OpenAI client (Phase 2+ reasoning only).
   agent/ actions/ approvals/ verification/
                           Phase 2/3 vocabularies (types only, no fake logic).
@@ -130,6 +131,15 @@ to `orgId` with actor, entity, and a JSON `metadata` payload. New `JournalEntry`
 rows default to `DRAFT` in Prisma; the migration
 `20260906140000_align_journal_status_default_draft` aligns the PostgreSQL column
 default with the schema (seeded entries still write an explicit `POSTED`).
+
+### Evidence lineage
+
+`GET /api/incidents/[id]/evidence` lists the ledger (`?findingId=&toolName=&
+sourceType=`, paginated); `GET .../evidence/[evidenceId]?expand=source`
+resolves the lineage source row org-scoped (`INVOICE`, `CONTRACT`,
+`PURCHASE_ORDER`, `TRANSACTION`, `JOURNAL_ENTRY` today; bank/forecast/budget/
+document kinds are valid enum values that resolve once B4 models them).
+Missing rows resolve to `{ row: null, reason }` — never fabricated.
 
 ## Environment
 

@@ -440,6 +440,15 @@ model IncidentEvidence {
   input      Json     @default("{}")
   output     Json     @default("{}")
   summary    String   @default("")
+  // Lineage: CLAIM → FINDING → CALCULATION → source row → origin system.
+  // sourceType names an EvidenceSourceType (see lib/evidence/types.ts);
+  // sourceId is that row's id. Both-or-neither; resolution is org-scoped
+  // and best-effort (missing row → null source + reason, never fabricated).
+  sourceType String?
+  sourceId   String?
+  // 0..1 weights for ranking; null = unrated (legacy rows).
+  relevance  Float?
+  confidence Float?
   occurredAt DateTime @default(now())
 
   incident FinancialIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
@@ -447,6 +456,7 @@ model IncidentEvidence {
 
   @@index([incidentId])
   @@index([findingId])
+  @@index([incidentId, occurredAt])
 }
 
 model IncidentAction {

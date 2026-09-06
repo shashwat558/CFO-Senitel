@@ -1,32 +1,5 @@
 // Evidence helper — every material agent conclusion must trace to rows here.
-// Phase 1: used by seed/tests; Phase 2: the Investigator Agent records each
-// tool call's input/output as IncidentEvidence via this function.
+// Backward-compatible re-export: use lib/evidence/service (+ types) directly.
 
-import type { PrismaClient } from "@prisma/client";
-
-export interface RecordEvidenceInput {
-  incidentId: string;
-  toolName: string;
-  input: unknown;
-  output: unknown;
-  summary: string;
-  findingId?: string;
-}
-
-export async function recordEvidence(db: PrismaClient, e: RecordEvidenceInput) {
-  if (!e.incidentId) throw new Error("incidentId is required");
-  if (!e.toolName) throw new Error("toolName is required");
-  if (typeof e.summary !== "string" || e.summary.length === 0) {
-    throw new Error("summary is required");
-  }
-  return db.incidentEvidence.create({
-    data: {
-      incidentId: e.incidentId,
-      findingId: e.findingId ?? null,
-      toolName: e.toolName,
-      input: (e.input ?? {}) as never,
-      output: (e.output ?? {}) as never,
-      summary: e.summary.slice(0, 2000),
-    },
-  });
-}
+export { recordEvidence } from "./service";
+export type { RecordEvidenceInput } from "./types";

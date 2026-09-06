@@ -54,6 +54,8 @@ export interface EvidenceRow {
   toolName: string;
   summary: string;
   occurredAt: Date | string;
+  sourceType?: string | null;
+  sourceId?: string | null;
 }
 
 /** COMPLETED rows that stopped early (output.stopped) surface as MAX_ITERATIONS. */
@@ -140,6 +142,8 @@ export function buildRunEvents(args: {
       toolName: e.toolName,
       summary: e.summary,
       occurredAt: iso(e.occurredAt),
+      ...(e.sourceType ? { sourceType: e.sourceType } : {}),
+      ...(e.sourceId ? { sourceId: e.sourceId } : {}),
     });
   }
 

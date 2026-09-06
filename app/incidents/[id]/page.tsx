@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EvidenceInspector } from "@/components/EvidenceInspector";
+import { useToast } from "@/components/Toasts";
 
 interface Detail {
   id: string;
@@ -11,7 +13,7 @@ interface Detail {
   status: string;
   severity: string;
   findings: Array<{ id: string; title: string; confidence: number }>;
-  evidence: Array<{ id: string; findingId: string | null; toolName: string; summary: string; occurredAt: string }>;
+  evidence: Array<{ id: string; findingId: string | null; toolName: string; input: unknown; output: unknown; summary: string; occurredAt: string }>;
   actions: Array<{ id: string; title: string; status: string }>;
 }
 
@@ -71,6 +73,7 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
   const [actionError, setActionError] = useState<string | null>(null);
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { push } = useToast();
 
   const loadDetail = useCallback(async () => {
     try {
@@ -140,7 +143,9 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
     e.preventDefault();
     const q = question.trim();
     if (q.length < 3) {
-      setActionError("Question must be at least 3 characters.");
+      const msg = "Question must be at least 3 characters.";
+      setActionError(msg);
+      push(msg, "error");
       return;
     }
     setStarting(true);
@@ -158,7 +163,9 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
       setQuestion("");
       await loadRuns();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Investigation could not start.");
+      const msg = err instanceof Error ? err.message : "Investigation could not start.";
+      setActionError(msg);
+      push(msg, "error");
     } finally {
       setStarting(false);
     }
@@ -172,7 +179,9 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
       if (!res.ok) throw new Error(j.error ?? "cancel failed");
       await loadRuns();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not cancel run.");
+      const msg = err instanceof Error ? err.message : "Could not cancel run.";
+      setActionError(msg);
+      push(msg, "error");
     }
   };
 
@@ -406,36 +415,7 @@ export default function IncidentDetailPage({ params }: { params: { id: string } 
           <span className="telemetry-chip font-mono">POSTGRES JOURNAL VERIFIED</span>
         </div>
 
-        {data.evidence.length === 0 ? (
-          <p className="font-mono muted" style={{ fontSize: "12px" }}>
-            No evidence records logged yet. Every agent tool invocation writes immutable evidence here.
-          </p>
-        ) : (
-          <div style={{ border: "1px solid var(--lp-border)", background: "#fff" }}>
-            {data.evidence.map((e) => (
-              <div key={e.id} className="evidence-row">
-                <div className="evidence-left">
-                  <code className="inline">{e.toolName}</code>
-                  <span style={{ color: "var(--lp-fg-muted)" }}>{e.summary}</span>
-                </div>
-                <div>
-                  {e.findingId ? (
-                    <a
-                      href={`#finding-${e.findingId}`}
-                      className="badge-tag"
-                      style={{ background: "#f8fafc", color: "var(--lp-fg-muted)", borderColor: "var(--lp-border)" }}
-                      title="Navigate to linked finding"
-                    >
-                      LINKED FINDING &rarr;
-                    </a>
-                  ) : (
-                    <span className="muted" style={{ fontSize: "10px" }}>UNLINKED</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <EvidenceInspector evidence={data.evidence} />
       </div>
 
       {/* Actions Panel */}

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToastProvider } from "@/components/Toasts";
 
 export const metadata: Metadata = {
   title: "CFO Sentinel — Agentic Financial Incident Investigation & Response",
@@ -18,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );
